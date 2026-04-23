@@ -1,0 +1,274 @@
+"""NodeHeader, ResizeGrip, NodeFrame: chrome dos cards no canvas."""
+
+from PyQt6.QtCore import QEvent, QPointF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QPainter, QPen
+from PyQt6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .tokens import (
+    ACCENT,
+    BG_ELEVATED,
+    BG_SURFACE,
+    BORDER,
+    BORDER_HOVER,
+    DANGER,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+)
+from .widgets import EditableLabel
+
+
+class NodeHeader(QWidget):
+    drag_moved      = pyqtSignal(QPointF)
+    close_clicked   = pyqtSignal()
+    focus_requested = pyqtSignal()
+    title_changed   = pyqtSignal(str)
+    font_up_clicked   = pyqtSignal()
+    font_down_clicked = pyqtSignal()
+    color_picked      = pyqtSignal(str)
+
+    def __init__(self, title):
+        super().__init__()
+        self.setFixedHeight(34)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._dragging     = False
+        self._last_global  = None
+        self._accent_color = ACCENT
+        self._apply_style()
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 0, 8, 0)
+        layout.setSpacing(10)
+
+        self.dot = QLabel("●")
+        self.dot.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt; background: transparent;")
+        layout.addWidget(self.dot)
+
+        self.title = EditableLabel(title)
+        self.title.set_label_style(
+            f"QLabel {{ color: {TEXT_SECONDARY}; font-family: 'Segoe UI';"
+            f"font-size: 10pt; font-weight: 500; background: transparent; }}"
+        )
+        self.title.text_changed.connect(self.title_changed.emit)
+        layout.addWidget(self.title, 1)
+
+        font_btn_style = f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_MUTED};
+                border: none; font-size: 8pt; font-weight: 600; padding: 0 3px;
+            }}
+            QPushButton:hover {{ color: {TEXT_PRIMARY}; }}
+        """
+        self.font_down_btn = QPushButton("A−")
+        self.font_down_btn.setFixedSize(26, 22)
+        self.font_down_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.font_down_btn.setStyleSheet(font_btn_style)
+        self.font_down_btn.clicked.connect(self.font_down_clicked.emit)
+        self.font_down_btn.hide()
+        layout.addWidget(self.font_down_btn)
+
+        self.font_up_btn = QPushButton("A+")
+        self.font_up_btn.setFixedSize(26, 22)
+        self.font_up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.font_up_btn.setStyleSheet(font_btn_style)
+        self.font_up_btn.clicked.connect(self.font_up_clicked.emit)
+        self.font_up_btn.hide()
+        layout.addWidget(self.font_up_btn)
+
+        self.color_btn = QPushButton()
+        self.color_btn.setFixedSize(16, 16)
+        self.color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.color_btn.setToolTip("Cor da borda")
+        self.color_btn.clicked.connect(self._pick_color)
+        self.color_btn.hide()
+        self._update_color_btn()
+        layout.addWidget(self.color_btn)
+
+        self.close_btn = QPushButton("×")
+        self.close_btn.setFixedSize(22, 22)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_SECONDARY};
+                          border: none; font-size: 16pt; font-weight: 300; padding-bottom: 3px; }}
+            QPushButton:hover {{ background: {DANGER}; color: white; border-radius: 4px; }}
+        """)
+        self.close_btn.clicked.connect(self.close_clicked.emit)
+        layout.addWidget(self.close_btn)
+
+    def _update_color_btn(self):
+        self.color_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self._accent_color};
+                border: 1px solid {BORDER_HOVER};
+                border-radius: 8px;
+            }}
+            QPushButton:hover {{ border-color: {TEXT_PRIMARY}; }}
+        """)
+
+    def _pick_color(self):
+        color = QColorDialog.getColor(QColor(self._accent_color), self, "Cor da borda")
+        if color.isValid():
+            self._accent_color = color.name()
+            self._update_color_btn()
+            self.color_picked.emit(self._accent_color)
+
+    def set_accent_color(self, color):
+        self._accent_color = color
+        self._update_color_btn()
+
+    def show_font_controls(self):
+        self.font_down_btn.show()
+        self.font_up_btn.show()
+        self.color_btn.show()
+
+    def _apply_style(self):
+        self.setStyleSheet(f"""
+            NodeHeader {{ background: {BG_ELEVATED};
+                         border-bottom: 1px solid {BORDER}; }}
+        """)
+
+    def set_focused(self, focused):
+        color  = self._accent_color if focused else TEXT_MUTED
+        self.dot.setStyleSheet(f"color: {color}; font-size: 9pt; background: transparent;")
+        tcolor = TEXT_PRIMARY if focused else TEXT_SECONDARY
+        self.title.set_label_style(
+            f"QLabel {{ color: {tcolor}; font-family: 'Segoe UI';"
+            f"font-size: 10pt; font-weight: 500; background: transparent; }}"
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging    = True
+            self._last_global = QCursor.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.focus_requested.emit()
+            QApplication.instance().installEventFilter(self)
+        super().mousePressEvent(event)
+
+    def eventFilter(self, obj, event):
+        if self._dragging:
+            if event.type() == QEvent.Type.MouseMove:
+                new_pos = QCursor.pos()
+                delta   = QPointF(new_pos - self._last_global)
+                self._last_global = new_pos
+                if not delta.isNull():
+                    self.drag_moved.emit(delta)
+                return False
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                self._end_drag()
+        return False
+
+    def _end_drag(self):
+        if self._dragging:
+            self._dragging    = False
+            self._last_global = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            QApplication.instance().removeEventFilter(self)
+
+    def mouseReleaseEvent(self, event):
+        self._end_drag()
+        super().mouseReleaseEvent(event)
+
+
+class ResizeGrip(QWidget):
+    resize_moved = pyqtSignal(QPointF)
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self.setStyleSheet("background: transparent;")
+        self._last_pos = None
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(BORDER_HOVER), 1.3))
+        for i in range(3):
+            off = 5 + i * 4
+            p.drawLine(off, 15, 15, off)
+        p.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._last_pos = event.globalPosition()
+
+    def mouseMoveEvent(self, event):
+        if self._last_pos is not None:
+            delta          = event.globalPosition() - self._last_pos
+            self._last_pos = event.globalPosition()
+            self.resize_moved.emit(delta)
+
+    def mouseReleaseEvent(self, event):
+        self._last_pos = None
+
+
+class NodeFrame(QFrame):
+    resized = pyqtSignal(QSize)
+
+    def __init__(self, title, inner):
+        super().__init__()
+        self.inner         = inner
+        self._focused      = False
+        self._node_color   = ACCENT
+        self._custom_color = False
+        self.setObjectName("node")
+        self.setMinimumSize(260, 180)
+
+        main = QVBoxLayout(self)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(0)
+
+        self.header = NodeHeader(title)
+        main.addWidget(self.header)
+
+        self.body = QWidget()
+        self.body.setStyleSheet(f"QWidget {{ background: {BG_SURFACE}; }}")
+        body_layout = QVBoxLayout(self.body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.addWidget(inner)
+        main.addWidget(self.body, 1)
+
+        self.grip = ResizeGrip()
+        self.grip.setParent(self)
+        self.grip.raise_()
+
+        self._apply_style()
+
+    def _apply_style(self):
+        border = self._node_color if self._focused else BORDER
+        width  = 2 if self._focused else 1
+        self.setStyleSheet(f"""
+            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 0px; }}
+        """)
+
+    def set_node_color(self, color, custom=False):
+        self._node_color = color
+        if custom:
+            self._custom_color = True
+        self.header.set_accent_color(color)
+        self._apply_style()
+
+    def set_focused(self, focused):
+        if self._focused == focused:
+            return
+        self._focused = focused
+        self._apply_style()
+        self.header.set_focused(focused)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.grip.move(
+            self.width()  - self.grip.width()  - 2,
+            self.height() - self.grip.height() - 2,
+        )
+        self.resized.emit(event.size())
