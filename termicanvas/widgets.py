@@ -99,7 +99,7 @@ class PromptCard(QWidget):
         self._btn.setStyleSheet(f"""
             QPushButton {{
                 background: {ACCENT}; color: white; border: none;
-                border-radius: 6px; padding: 0 14px;
+                border-radius: 2px; padding: 0 14px;
                 font-family: 'Segoe UI'; font-size: 9.5pt; font-weight: 500;
             }}
             QPushButton:hover {{ background: {ACCENT_HOVER}; }}
@@ -154,7 +154,7 @@ class EditableLabel(QWidget):
                 background: {BG_SURFACE};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {ACCENT};
-                border-radius: 3px;
+                border-radius: 2px;
                 padding: 1px 4px;
                 font-family: 'Segoe UI';
                 font-size: 10pt;

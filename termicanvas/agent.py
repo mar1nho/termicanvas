@@ -132,7 +132,7 @@ class AgentWidget(QWidget):
         self._input.setStyleSheet(f"""
             QLineEdit {{
                 background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 18px;
+                border: 1px solid {BORDER}; border-radius: 2px;
                 padding: 8px 16px; font-family: 'Segoe UI'; font-size: 10pt;
             }}
             QLineEdit:focus {{ border-color: {ACCENT}; }}
@@ -146,7 +146,7 @@ class AgentWidget(QWidget):
         self._btn.setStyleSheet(f"""
             QPushButton {{
                 background: {ACCENT}; color: white; border: none;
-                border-radius: 18px; font-size: 14pt; font-weight: bold;
+                border-radius: 2px; font-size: 14pt; font-weight: bold;
             }}
             QPushButton:hover {{ background: {ACCENT_HOVER}; }}
             QPushButton:disabled {{ background: {BORDER}; color: {TEXT_MUTED}; }}
@@ -162,7 +162,7 @@ class AgentWidget(QWidget):
         self._route_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {TEXT_MUTED};
-                border: 1px solid {BORDER}; border-radius: 4px;
+                border: 1px solid {BORDER}; border-radius: 2px;
                 padding: 3px 10px; font-size: 8.5pt;
                 margin: 0 12px 8px 12px;
             }}

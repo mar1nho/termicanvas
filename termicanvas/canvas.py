@@ -464,7 +464,7 @@ class CanvasNav(QWidget):
             #cannav {{
                 background: {BG_SIDEBAR};
                 border: 1px solid {BORDER};
-                border-radius: 8px;
+                border-radius: 2px;
             }}
         """)
 
@@ -486,7 +486,7 @@ class CanvasNav(QWidget):
             b.setStyleSheet(f"""
                 QPushButton {{
                     background: {BG_ELEVATED}; color: {TEXT_SECONDARY};
-                    border: 1px solid {BORDER}; border-radius: 6px;
+                    border: 1px solid {BORDER}; border-radius: 2px;
                     font-size: 11pt; font-weight: 500;
                 }}
                 QPushButton:hover {{

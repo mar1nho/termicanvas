@@ -99,7 +99,7 @@ class NodeHeader(QWidget):
         self.close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {TEXT_SECONDARY};
                           border: none; font-size: 16pt; font-weight: 300; padding-bottom: 3px; }}
-            QPushButton:hover {{ background: {DANGER}; color: white; border-radius: 4px; }}
+            QPushButton:hover {{ background: {DANGER}; color: white; border-radius: 2px; }}
         """)
         self.close_btn.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self.close_btn)
@@ -109,7 +109,7 @@ class NodeHeader(QWidget):
             QPushButton {{
                 background: {self._accent_color};
                 border: 1px solid {BORDER_HOVER};
-                border-radius: 8px;
+                border-radius: 2px;
             }}
             QPushButton:hover {{ border-color: {TEXT_PRIMARY}; }}
         """)

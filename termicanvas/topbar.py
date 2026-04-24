@@ -71,7 +71,7 @@ class TerminalChip(QFrame):
         border = self._accent_color if focused else BORDER
         bg     = BG_ELEVATED if focused else "transparent"
         self.setStyleSheet(f"""
-            #chip {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}
+            #chip {{ background: {bg}; border: 1px solid {border}; border-radius: 2px; }}
             #chip:hover {{ background: {BG_ELEVATED}; border-color: {BORDER_HOVER}; }}
         """)
 
@@ -257,7 +257,7 @@ class TopBar(QWidget):
             QPushButton {{
                 background: {self._accent_color};
                 border: 1px solid {BORDER_HOVER};
-                border-radius: 10px;
+                border-radius: 2px;
             }}
             QPushButton:hover {{ border-color: {TEXT_PRIMARY}; }}
         """)
@@ -283,7 +283,7 @@ class TopBar(QWidget):
         b.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 6px;
+                border: 1px solid {BORDER}; border-radius: 2px;
                 padding: 0 12px; font-size: 9.5pt;
             }}
             QPushButton:hover {{

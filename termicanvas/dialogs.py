@@ -68,7 +68,8 @@ class TerminalLaunchDialog(QDialog):
         self.name_input.setStyleSheet(f"""
             QLineEdit {{
                 background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; padding: 10px 12px;
+                border: 1px solid {BORDER}; border-radius: 2px;
+                padding: 10px 12px;
                 font-family: 'Segoe UI'; font-size: 10pt;
             }}
             QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
@@ -87,6 +88,7 @@ class TerminalLaunchDialog(QDialog):
         self.path_label = QLabel(initial)
         self.path_label.setStyleSheet(f"""
             background: {BG_ELEVATED}; border: 1px solid {BORDER};
+            border-radius: 2px;
             padding: 10px 12px; color: {TEXT_PRIMARY};
             font-family: 'Cascadia Mono','Consolas',monospace;
             font-size: 9.5pt;
@@ -127,7 +129,8 @@ class TerminalLaunchDialog(QDialog):
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         b.setStyleSheet(f"""
             QPushButton {{ background: transparent; color: {TEXT_SECONDARY};
-                          border: 1px solid {BORDER}; padding: 9px 14px;
+                          border: 1px solid {BORDER}; border-radius: 2px;
+                          padding: 9px 14px;
                           font-family: 'Segoe UI'; font-size: 10pt; }}
             QPushButton:hover {{ background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
                                 border: 1px solid {BORDER_HOVER}; }}
@@ -139,6 +142,7 @@ class TerminalLaunchDialog(QDialog):
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         b.setStyleSheet(f"""
             QPushButton {{ background: {ACCENT}; color: white; border: none;
+                          border-radius: 2px;
                           padding: 10px 18px; font-family: 'Segoe UI';
                           font-size: 10pt; font-weight: 500; }}
             QPushButton:hover {{ background: {ACCENT_HOVER}; }}
