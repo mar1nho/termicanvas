@@ -460,6 +460,8 @@ class CanvasNav(QWidget):
     def __init__(self, canvas):
         super().__init__(canvas)
         self.setObjectName("cannav")
+        self._accent_color = ACCENT
+        self._buttons = []
         self.setStyleSheet(f"""
             #cannav {{
                 background: {BG_SIDEBAR};
@@ -483,20 +485,31 @@ class CanvasNav(QWidget):
             b.setFixedSize(32, 32)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(tooltips[label])
-            b.setStyleSheet(f"""
-                QPushButton {{
-                    background: {BG_ELEVATED}; color: {TEXT_SECONDARY};
-                    border: 1px solid {BORDER}; border-radius: 2px;
-                    font-size: 11pt; font-weight: 500;
-                }}
-                QPushButton:hover {{
-                    color: {TEXT_PRIMARY}; border-color: {BORDER_HOVER};
-                    background: {BG_SURFACE};
-                }}
-                QPushButton:pressed {{ background: {BG_TERMINAL}; }}
-            """)
             b.clicked.connect(slot)
+            self._buttons.append(b)
             layout.addWidget(b)
 
+        self._apply_button_style()
         self.adjustSize()
         self.raise_()
+
+    def _apply_button_style(self):
+        hover_border = self._accent_color
+        style = f"""
+            QPushButton {{
+                background: {BG_ELEVATED}; color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER}; border-radius: 2px;
+                font-size: 11pt; font-weight: 500;
+            }}
+            QPushButton:hover {{
+                color: {TEXT_PRIMARY}; border-color: {hover_border};
+                background: {BG_SURFACE};
+            }}
+            QPushButton:pressed {{ background: {BG_TERMINAL}; }}
+        """
+        for b in self._buttons:
+            b.setStyleSheet(style)
+
+    def set_accent(self, color):
+        self._accent_color = color
+        self._apply_button_style()

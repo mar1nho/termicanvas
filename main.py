@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
         for chip in self.topbar.terminals_bar.chips.values():
             if not chip._custom_accent:
                 chip.set_accent(color)
+        self.canvas._nav.set_accent(color)
 
     def _add_term(self, shell):
         pretty_shell = {

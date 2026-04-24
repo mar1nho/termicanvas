@@ -26,13 +26,16 @@ from .tokens import (
     BORDER_HOVER,
     TEXT_MUTED,
     TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    readable_text_color,
 )
 
 
 class ChatBubble(QFrame):
-    def __init__(self, text, role):
+    def __init__(self, text, role, bubble_bg=None):
         super().__init__()
         is_user = role == "user"
+        user_bg = bubble_bg or ACCENT
         self.setStyleSheet("background: transparent;")
 
         outer = QHBoxLayout(self)
@@ -45,8 +48,9 @@ class ChatBubble(QFrame):
         self._lbl = QLabel(text)
         self._lbl.setWordWrap(True)
         self._lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        text_color = readable_text_color(user_bg) if is_user else TEXT_PRIMARY
         self._lbl.setStyleSheet(f"""
-            color: {"white" if is_user else TEXT_PRIMARY};
+            color: {text_color};
             font-family: 'Segoe UI'; font-size: 10pt; background: transparent;
         """)
 
@@ -56,7 +60,7 @@ class ChatBubble(QFrame):
 
         if is_user:
             self._bubble.setStyleSheet(f"""
-                QFrame {{ background: {ACCENT}; border-radius: 16px;
+                QFrame {{ background: {user_bg}; border-radius: 16px;
                          border-bottom-right-radius: 3px; }}
             """)
             outer.addStretch()
@@ -149,7 +153,7 @@ class AgentWidget(QWidget):
                 border-radius: 2px; font-size: 14pt; font-weight: bold;
             }}
             QPushButton:hover {{ background: {ACCENT_HOVER}; }}
-            QPushButton:disabled {{ background: {BORDER}; color: {TEXT_MUTED}; }}
+            QPushButton:disabled {{ background: {BG_ELEVATED}; color: {TEXT_SECONDARY}; }}
         """)
         self._btn.clicked.connect(self._send)
         row.addWidget(self._btn)
@@ -175,10 +179,19 @@ class AgentWidget(QWidget):
         layout.addWidget(self._route_btn)
 
     def _add_bubble(self, text, role):
-        bubble = ChatBubble(text, role)
+        bubble = ChatBubble(text, role, bubble_bg=self._bubble_bg())
         self._chat_layout.insertWidget(self._chat_layout.count() - 1, bubble)
         QTimer.singleShot(40, self._scroll_bottom)
         return bubble
+
+    def _bubble_bg(self):
+        """Cor de fundo das bolhas do usuario — segue o accent do node se houver."""
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "_node_color"):
+                return parent._node_color
+            parent = parent.parent()
+        return ACCENT
 
     def _scroll_bottom(self):
         sb = self._scroll.verticalScrollBar()

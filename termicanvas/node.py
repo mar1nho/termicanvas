@@ -23,6 +23,7 @@ from .tokens import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    safe_border_color,
 )
 from .widgets import EditableLabel
 
@@ -245,7 +246,7 @@ class NodeFrame(QFrame):
         self._apply_style()
 
     def _apply_style(self):
-        border = self._node_color if self._focused else BORDER
+        border = safe_border_color(self._node_color) if self._focused else BORDER
         width  = 2 if self._focused else 1
         self.setStyleSheet(f"""
             #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 0px; }}

@@ -25,6 +25,7 @@ from .tokens import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
+    safe_border_color,
 )
 
 
@@ -68,7 +69,7 @@ class TerminalChip(QFrame):
         layout.addWidget(self.cmd_label)
 
     def _apply_style(self, focused):
-        border = self._accent_color if focused else BORDER
+        border = safe_border_color(self._accent_color) if focused else BORDER
         bg     = BG_ELEVATED if focused else "transparent"
         self.setStyleSheet(f"""
             #chip {{ background: {bg}; border: 1px solid {border}; border-radius: 2px; }}
