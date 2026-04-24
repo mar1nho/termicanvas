@@ -205,7 +205,7 @@ class TopBar(QWidget):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(0)
 
-        brand = QLabel("MAESTRO")
+        brand = QLabel("TERMICANVAS")
         brand.setStyleSheet(f"""
             color: {TEXT_PRIMARY}; font-size: 11pt; font-weight: 600;
             letter-spacing: 2px; background: transparent;

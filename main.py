@@ -1,7 +1,7 @@
 """
-Maestro — Orchestration Canvas
-------------------------------
-Entry point. Composicao das pecas do pacote `maestro`.
+TermiCanvas — Orchestration Canvas
+----------------------------------
+Entry point. Composicao das pecas do pacote `termicanvas`.
 """
 
 import sys
@@ -9,21 +9,21 @@ import sys
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QMainWindow, QVBoxLayout, QWidget
 
-from maestro.agent import AgentWidget
-from maestro.canvas import CanvasView
-from maestro.config import DEFAULT_CWD, set_last_custom_cwd
-from maestro.dialogs import TerminalLaunchDialog
-from maestro.session import load_session, save_session
-from maestro.terminal import TerminalWidget
-from maestro.tokens import ACCENT, BG_CANVAS
-from maestro.topbar import TopBar
-from maestro.widgets import NoteWidget, PromptCard
+from termicanvas.agent import AgentWidget
+from termicanvas.canvas import CanvasView
+from termicanvas.config import DEFAULT_CWD, set_last_custom_cwd
+from termicanvas.dialogs import TerminalLaunchDialog
+from termicanvas.session import load_session, save_session
+from termicanvas.terminal import TerminalWidget
+from termicanvas.tokens import ACCENT, BG_CANVAS
+from termicanvas.topbar import TopBar
+from termicanvas.widgets import NoteWidget, PromptCard
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Maestro")
+        self.setWindowTitle("TermiCanvas")
         self.resize(1520, 960)
         self.setStyleSheet(f"QMainWindow {{ background: {BG_CANVAS}; }}")
 

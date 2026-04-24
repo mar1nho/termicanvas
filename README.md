@@ -1,6 +1,6 @@
-# Powershell Maestro — Python Prototype
+# TermiCanvas — Python Prototype
 
-Versao em Python do Powershell Maestro. Canvas com janelas arrastaveis contendo terminais PowerShell/CMD, agente de chat e notas.
+Canvas infinito com terminais PowerShell/CMD, agente de chat e notas arrastaveis.
 
 ## Stack
 
@@ -33,7 +33,7 @@ python main.py
 
 ## Uso
 
-- **Painel lateral esquerdo (Maestro):**
+- **Painel lateral esquerdo (TermiCanvas):**
   - Adicionar PowerShell 5, PowerShell 7 (pwsh), CMD, Agente ou Nota
   - Digitar comando no campo grande e clicar "Executar" — envia para o terminal ativo
   - Botoes "Grade" / "Cascata" organizam os nodes
@@ -52,10 +52,10 @@ python main.py
 
 ```powershell
 pip install pyinstaller
-pyinstaller --onefile --windowed --name "PowershellMaestro" main.py
+pyinstaller --onefile --windowed --name "TermiCanvas" main.py
 ```
 
-Resultado em `dist\PowershellMaestro.exe` (~50 MB). Distribuir esse arquivo — o usuario final nao precisa de Python instalado.
+Resultado em `dist\TermiCanvas.exe` (~50 MB). Distribuir esse arquivo — o usuario final nao precisa de Python instalado.
 
 ## Proximos passos possiveis
 
