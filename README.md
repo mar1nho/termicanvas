@@ -1,5 +1,7 @@
 # TermiCanvas
 
+![TermiCanvas](img1.png)
+
 Canvas infinito para orquestrar múltiplos terminais PowerShell/CMD em paralelo, no estilo Figma/n8n. Pensado para rodar várias CLIs (incluindo agentes de IA) lado a lado, com pan, zoom e nodes arrastáveis.
 
 ---
@@ -149,6 +151,8 @@ Resultado em `dist\TermiCanvas.exe` (~50 MB). O usuário final não precisa de P
 - Terminal responsivo ao tamanho do node
 - Hotkeys globais (`Ctrl+T` novo terminal, etc.)
 - Salvar/carregar workspaces nomeados
+
+![TermiCanvas em uso](imagem2.png)
 
 ---
 
