@@ -20,6 +20,7 @@ from .tokens import (
     BORDER,
     BORDER_HOVER,
     DANGER,
+    SUCCESS,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -33,11 +34,14 @@ class NodeHeader(QWidget):
     close_clicked   = pyqtSignal()
     focus_requested = pyqtSignal()
     title_changed   = pyqtSignal(str)
+    icon_changed    = pyqtSignal(str)
     font_up_clicked   = pyqtSignal()
     font_down_clicked = pyqtSignal()
     color_picked      = pyqtSignal(str)
+    edit_role_clicked = pyqtSignal()
+    auto_reply_toggled = pyqtSignal(bool)
 
-    def __init__(self, title):
+    def __init__(self, title, icon=""):
         super().__init__()
         self.setFixedHeight(34)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -53,6 +57,17 @@ class NodeHeader(QWidget):
         self.dot = QLabel("●")
         self.dot.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt; background: transparent;")
         layout.addWidget(self.dot)
+
+        self.icon = EditableLabel(icon)
+        self.icon.set_label_style(
+            f"QLabel {{ color: {TEXT_PRIMARY}; font-family: 'Segoe UI';"
+            f"font-size: 11pt; background: transparent; padding: 0px; }}"
+        )
+        self.icon.setFixedWidth(28 if icon else 0)
+        if not icon:
+            self.icon.setHidden(True)
+        self.icon.text_changed.connect(self._on_icon_changed)
+        layout.addWidget(self.icon)
 
         self.title = EditableLabel(title)
         self.title.set_label_style(
@@ -85,6 +100,31 @@ class NodeHeader(QWidget):
         self.font_up_btn.hide()
         layout.addWidget(self.font_up_btn)
 
+        self.role_btn = QPushButton("📝")
+        self.role_btn.setFixedSize(22, 22)
+        self.role_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.role_btn.setToolTip("Editar role gerenciado (.termicanvas/role.md)")
+        self.role_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {TEXT_MUTED};
+                border: none; font-size: 11pt; padding: 0;
+            }}
+            QPushButton:hover {{ color: {TEXT_PRIMARY}; }}
+        """)
+        self.role_btn.clicked.connect(self.edit_role_clicked.emit)
+        self.role_btn.hide()
+        layout.addWidget(self.role_btn)
+
+        self.auto_reply_btn = QPushButton("🔁")
+        self.auto_reply_btn.setFixedSize(22, 22)
+        self.auto_reply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.auto_reply_btn.setCheckable(True)
+        self.auto_reply_btn.setToolTip("Auto-responder: quando ativo, captura a resposta apos receber\nmensagem do bus e envia automaticamente ao emissor")
+        self._update_auto_reply_btn_style()
+        self.auto_reply_btn.toggled.connect(self._on_auto_reply_toggled)
+        self.auto_reply_btn.hide()
+        layout.addWidget(self.auto_reply_btn)
+
         self.color_btn = QPushButton()
         self.color_btn.setFixedSize(16, 16)
         self.color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -104,6 +144,21 @@ class NodeHeader(QWidget):
         """)
         self.close_btn.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self.close_btn)
+
+    def _on_icon_changed(self, text):
+        # limita a 4 chars
+        text = (text or "")[:4]
+        if text != self.icon.text():
+            self.icon.setText(text)
+        self.icon.setFixedWidth(28 if text else 0)
+        self.icon.setHidden(not text)
+        self.icon_changed.emit(text)
+
+    def set_icon(self, text):
+        text = (text or "")[:4]
+        self.icon.setText(text)
+        self.icon.setFixedWidth(28 if text else 0)
+        self.icon.setHidden(not text)
 
     def _update_color_btn(self):
         self.color_btn.setStyleSheet(f"""
@@ -130,6 +185,37 @@ class NodeHeader(QWidget):
         self.font_down_btn.show()
         self.font_up_btn.show()
         self.color_btn.show()
+
+    def show_role_btn(self):
+        self.role_btn.show()
+
+    def show_auto_reply_btn(self):
+        self.auto_reply_btn.show()
+
+    def set_auto_reply_state(self, enabled):
+        # Bloqueia signal pra nao re-emitir ao restaurar de session
+        self.auto_reply_btn.blockSignals(True)
+        self.auto_reply_btn.setChecked(bool(enabled))
+        self.auto_reply_btn.blockSignals(False)
+        self._update_auto_reply_btn_style()
+
+    def _on_auto_reply_toggled(self, checked):
+        self._update_auto_reply_btn_style()
+        self.auto_reply_toggled.emit(checked)
+
+    def _update_auto_reply_btn_style(self):
+        on = self.auto_reply_btn.isChecked()
+        bg     = SUCCESS if on else "transparent"
+        color  = "white" if on else TEXT_MUTED
+        self.auto_reply_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {bg}; color: {color};
+                border: none; border-radius: 2px;
+                font-size: 11pt; padding: 0;
+            }}
+            QPushButton:hover {{ color: {TEXT_PRIMARY}; }}
+            QPushButton:checked {{ background: {SUCCESS}; color: white; }}
+        """)
 
     def _apply_style(self):
         self.setStyleSheet(f"""
@@ -216,7 +302,7 @@ class ResizeGrip(QWidget):
 class NodeFrame(QFrame):
     resized = pyqtSignal(QSize)
 
-    def __init__(self, title, inner):
+    def __init__(self, title, inner, icon=""):
         super().__init__()
         self.inner         = inner
         self._focused      = False
@@ -229,7 +315,7 @@ class NodeFrame(QFrame):
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
 
-        self.header = NodeHeader(title)
+        self.header = NodeHeader(title, icon=icon)
         main.addWidget(self.header)
 
         self.body = QWidget()
@@ -265,6 +351,9 @@ class NodeFrame(QFrame):
         self._focused = focused
         self._apply_style()
         self.header.set_focused(focused)
+
+    def icon_text(self):
+        return self.header.icon.text()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

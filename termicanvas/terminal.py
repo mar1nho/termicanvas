@@ -14,6 +14,7 @@ class _HistoryScreen(pyte.HistoryScreen):
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QPlainTextEdit
 
+from . import agents
 from .config import DEFAULT_CWD
 from .tokens import ACCENT, BG_TERMINAL, BORDER, BORDER_HOVER, TEXT_PRIMARY
 
@@ -38,12 +39,36 @@ class TerminalWidget(QPlainTextEdit):
     HISTORY   = 3000
     RAW_LIMIT = 300_000  # chars — janela deslizante do stream bruto para re-feed no resize
 
-    def __init__(self, shell="powershell.exe", cwd=None, startup_command=None):
+    def __init__(
+        self,
+        shell="powershell.exe",
+        cwd=None,
+        startup_command=None,
+        agent_kind=None,
+        role_name=None,
+        manifest_mode="existing",
+        env_extra=None,
+        node_id=None,
+    ):
         super().__init__()
         self.shell    = shell
         self.cwd      = cwd
         self.activity = ""
+        self.agent_kind   = agent_kind
+        self.role_name    = role_name
+        self.manifest_mode = manifest_mode
+        self.node_id      = node_id
+        self.env_extra    = env_extra
+        # Auto-responder: quando True, depois de receber via bus + idle, captura
+        # texto novo no terminal e envia de volta ao emissor via bus.
+        self.auto_reply         = False
+        self._pending_reply_to  = None  # node_id do emissor da ultima mensagem
+        self._reply_baseline    = ""    # _last_content snapshot ANTES da injecao
+        self._bus_ref           = None  # injetado pelo main.py apos registrar
         self._startup_command = startup_command
+        # CLI do agente sobe via prompt do shell — _check_idle dispara quando PS estiver pronto
+        if agent_kind:
+            self._startup_command = agents.startup_command(agent_kind)
         self._startup_sent    = False
         self._font_size = 10
 
@@ -102,6 +127,14 @@ class TerminalWidget(QPlainTextEdit):
         self._render_timer.timeout.connect(self._flush_render)
         self._render_timer.start()
 
+        # Detector de "stream silencioso" — quando para de chegar dado por X ms,
+        # consideramos o shell pronto e disparamos o startup_command (CLI do agente).
+        # Mais robusto que regex de prompt (funciona com Oh My Posh, Starship, etc).
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(900)
+        self._idle_timer.timeout.connect(self._fire_startup)
+
         self._raw_buf = ""   # stream VT100 acumulado para re-feed no resize
 
         self.pty   = None
@@ -118,6 +151,18 @@ class TerminalWidget(QPlainTextEdit):
             target_cwd = self.cwd or DEFAULT_CWD
             if target_cwd and os.path.isdir(target_cwd):
                 spawn_kwargs["cwd"] = target_cwd
+
+            if self.agent_kind and target_cwd:
+                agents.install_role(
+                    target_cwd, self.agent_kind, self.role_name,
+                    mode=self.manifest_mode,
+                )
+
+            if self.env_extra:
+                env_dict = dict(os.environ)
+                env_dict.update(self.env_extra)
+                spawn_kwargs["env"] = env_dict
+
             self.pty   = PtyProcess.spawn(self.shell, **spawn_kwargs)
             self.alive = True
             threading.Thread(target=self._read_loop, daemon=True).start()
@@ -145,6 +190,62 @@ class TerminalWidget(QPlainTextEdit):
         self.stream.feed(text)
         self._render_dirty = True
         self._check_idle()
+        # Stream chegando = nao esta idle. Reseta o timer de silencio.
+        self._idle_timer.start()
+        # Se nao havia atividade marcada, sinaliza "tem coisa rolando" pro bus/UI
+        if not self.activity:
+            self.activity = "..."
+            self.activity_changed.emit(self.activity)
+
+    def _fire_startup(self):
+        """Callback do timer de silencio (900ms sem dados novos).
+
+        Tres trabalhos:
+        1. Sobe a CLI do agente na primeira vez (startup_command pendente).
+        2. Marca como idle pra que o bus possa entregar (CLIs com prompt proprio).
+        3. Se auto_reply ativo + tem pending_reply_to: captura resposta gerada
+           desde a injecao e envia de volta ao emissor via bus.
+        """
+        if not self.alive:
+            return
+        if self._startup_command and not self._startup_sent:
+            self._startup_sent = True
+            self.send(self._startup_command)
+            return
+
+        if self.activity:
+            self.activity = ""
+            self.activity_changed.emit("")
+
+        # Auto-responder: enviar resposta capturada
+        if self._pending_reply_to and self._bus_ref:
+            self._dispatch_reply()
+
+    def _dispatch_reply(self):
+        """Captura texto novo desde a injecao e envia ao emissor via bus."""
+        try:
+            current = self._last_content
+            baseline = self._reply_baseline or ""
+            # Diff por suffixo: pega tudo que veio depois do baseline
+            if current.startswith(baseline):
+                response = current[len(baseline):]
+            else:
+                # Buffer pode ter rolado — pega ultimas N linhas
+                response = "\n".join(current.splitlines()[-20:])
+            response = response.strip()
+            if response and self._bus_ref:
+                self._bus_ref.enqueue(self.node_id, self._pending_reply_to, response)
+        except Exception:
+            pass
+        finally:
+            self._pending_reply_to = None
+            self._reply_baseline   = ""
+
+    def set_auto_reply(self, enabled):
+        self.auto_reply = bool(enabled)
+        if not self.auto_reply:
+            self._pending_reply_to = None
+            self._reply_baseline   = ""
 
     def _flush_render(self):
         if self._render_dirty:
@@ -287,6 +388,46 @@ class TerminalWidget(QPlainTextEdit):
             except Exception:
                 pass
 
+    def inject_message(self, message, from_node_id=None, from_name=None):
+        """Injeta mensagem no PTY como se digitada, separando texto e Enter.
+
+        TUIs como o claude code processam \\r imediatamente quando vem no mesmo
+        buffer que o texto — resultado: linha quebrada antes de submeter.
+        Dividindo em dois writes com delay garante que o TUI veja a mensagem
+        completa primeiro e SO ENTAO o Enter como submit.
+
+        Se from_name veio, prefixa "[de: <nome>] " pra destinatario identificar
+        emissor. Se auto_reply ativo, registra pending_reply_to + baseline.
+        """
+        if not (self.pty and self.alive):
+            return
+
+        if from_name:
+            text = f"[de: {from_name}] {message}"
+        else:
+            text = message
+
+        if self.auto_reply and from_node_id:
+            self._pending_reply_to = from_node_id
+            self._reply_baseline   = self._last_content
+
+        try:
+            self.activity = (text[:50] + "...") if len(text) > 50 else text
+            self.activity_changed.emit(self.activity)
+            self.pty.write(text)
+        except Exception:
+            return
+
+        # Enter separado apos delay — deixa o TUI processar a linha completa
+        QTimer.singleShot(150, self._inject_enter)
+
+    def _inject_enter(self):
+        if self.pty and self.alive:
+            try:
+                self.pty.write("\r")
+            except Exception:
+                pass
+
     def font_up(self):
         self._font_size = min(self._font_size + 1, 24)
         self._apply_font()
@@ -350,5 +491,11 @@ class TerminalWidget(QPlainTextEdit):
         if self.pty:
             try:
                 self.pty.terminate(force=True)
+            except Exception:
+                pass
+        # Limpa bloco gerenciado do CLAUDE.md/GEMINI.md raiz
+        if self.agent_kind and self.manifest_mode == "managed" and self.cwd:
+            try:
+                agents.remove_role_block(self.cwd, self.agent_kind)
             except Exception:
                 pass

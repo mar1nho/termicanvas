@@ -205,8 +205,8 @@ class CanvasView(QGraphicsView):
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         self._scene.update()
 
-    def add_node(self, inner_widget, title, size=(720, 460)):
-        frame = NodeFrame(title, inner_widget)
+    def add_node(self, inner_widget, title, size=(720, 460), icon=""):
+        frame = NodeFrame(title, inner_widget, icon=icon)
         frame.resize(*size)
 
         proxy = self._scene.addWidget(frame)
@@ -413,6 +413,14 @@ class CanvasView(QGraphicsView):
             if ctrl_only and key == Qt.Key.Key_Tab:
                 self._focus_next()
                 return True
+            # Alt + 1..9 — foca o N-esimo terminal (ordem da topbar)
+            if mods == Qt.KeyboardModifier.AltModifier:
+                if Qt.Key.Key_1.value <= key <= Qt.Key.Key_9.value:
+                    idx = key - Qt.Key.Key_1.value
+                    terminals = [f for _, f in self.proxies if isinstance(f.inner, TerminalWidget)]
+                    if 0 <= idx < len(terminals):
+                        self.focus_and_center(terminals[idx])
+                        return True
         return False
 
     def resizeEvent(self, event):

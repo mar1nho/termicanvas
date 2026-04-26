@@ -15,6 +15,7 @@ def save_session(canvas, accent_color=ACCENT):
         pos  = proxy.pos()
         base = {
             "name":         frame.header.title.text(),
+            "icon":         frame.icon_text() if hasattr(frame, "icon_text") else "",
             "x":            pos.x(),
             "y":            pos.y(),
             "w":            frame.width(),
@@ -24,10 +25,14 @@ def save_session(canvas, accent_color=ACCENT):
         }
         if isinstance(frame.inner, TerminalWidget):
             base.update({
-                "type":      "terminal",
-                "shell":     frame.inner.shell,
-                "cwd":       frame.inner.cwd or DEFAULT_CWD,
-                "font_size": frame.inner._font_size,
+                "type":          "terminal",
+                "shell":         frame.inner.shell,
+                "cwd":           frame.inner.cwd or DEFAULT_CWD,
+                "font_size":     frame.inner._font_size,
+                "agent_kind":    frame.inner.agent_kind,
+                "role_name":     frame.inner.role_name,
+                "manifest_mode": frame.inner.manifest_mode,
+                "auto_reply":    frame.inner.auto_reply,
             })
         elif isinstance(frame.inner, NoteWidget):
             base.update({
