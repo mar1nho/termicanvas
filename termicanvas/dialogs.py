@@ -4,7 +4,7 @@ import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
-    QRadioButton,
     QVBoxLayout,
 )
 
@@ -96,31 +95,35 @@ class TerminalLaunchDialog(QDialog):
 
         layout.addLayout(name_row)
 
-        # Modo de manifesto + role selector — so quando is_agent
-        self.role_combo = None
-        self._mode_group = None
+        # Detector automatico de manifesto + criacao opcional de role.
+        # Logica: se <cwd>/<manifest> existe -> usa direto sem perguntar.
+        # Se nao existe -> oferece checkbox "criar role gerenciado" + combo.
+        self.role_combo            = None
+        self._create_role_check    = None
+        self._manifest_status      = None
+        self._manifest_detected    = False  # atualizado em _refresh_manifest_status()
         if is_agent:
             layout.addSpacing(4)
-            layout.addWidget(self._caption("Manifesto do agente:"))
+            self._manifest_status = QLabel("")
+            self._manifest_status.setWordWrap(True)
+            self._manifest_status.setStyleSheet(f"""
+                color: {TEXT_PRIMARY}; font-size: 9pt; background: {BG_ELEVATED};
+                border: 1px solid {BORDER}; border-radius: 6px; padding: 10px 12px;
+            """)
+            layout.addWidget(self._manifest_status)
 
-            self._mode_group = QButtonGroup(self)
-
-            self._mode_existing = QRadioButton(
-                f"Usar {AGENT_KINDS[agent_kind]['manifest']} existente do projeto"
+            self._create_role_check = QCheckBox(
+                "Criar role gerenciado (TermiCanvas injeta como primeira mensagem)"
             )
-            self._mode_existing.setStyleSheet(self._radio_style())
-            self._mode_group.addButton(self._mode_existing)
-            layout.addWidget(self._mode_existing)
+            self._create_role_check.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {TEXT_PRIMARY}; font-size: 9.5pt;
+                    spacing: 8px; background: transparent;
+                }}
+                QCheckBox::indicator {{ width: 14px; height: 14px; }}
+            """)
+            layout.addWidget(self._create_role_check)
 
-            self._mode_managed = QRadioButton(
-                "Aplicar role gerenciado pelo TermiCanvas (cria .termicanvas/role.md)"
-            )
-            self._mode_managed.setStyleSheet(self._radio_style())
-            self._mode_managed.setChecked(True)
-            self._mode_group.addButton(self._mode_managed)
-            layout.addWidget(self._mode_managed)
-
-            layout.addSpacing(2)
             self._role_caption = self._caption("    Role:")
             layout.addWidget(self._role_caption)
             self.role_combo = QComboBox()
@@ -130,9 +133,8 @@ class TerminalLaunchDialog(QDialog):
                 self.role_combo.addItem(role.name, userData=role.name)
             layout.addWidget(self.role_combo)
 
-            self._mode_existing.toggled.connect(self._on_mode_changed)
-            self._mode_managed.toggled.connect(self._on_mode_changed)
-            self._on_mode_changed()
+            self._create_role_check.toggled.connect(self._on_create_role_toggled)
+            # estado inicial e definido apos _set_path inicial via _refresh_manifest_status
 
         layout.addSpacing(4)
         layout.addWidget(self._caption("Diretorio de trabalho:"))
@@ -177,6 +179,14 @@ class TerminalLaunchDialog(QDialog):
 
         layout.addLayout(footer)
 
+        # Detecta manifesto agora que toda a UI ja foi montada
+        if is_agent:
+            self._refresh_manifest_status()
+
+        # Ajusta dialogo ao tamanho natural — evita warnings de geometry
+        # quando MINMAXINFO entra em conflito com o tamanho desejado
+        self.adjustSize()
+
     def _caption(self, text):
         c = QLabel(text)
         c.setStyleSheet(f"""
@@ -196,21 +206,50 @@ class TerminalLaunchDialog(QDialog):
             QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
         """
 
-    def _radio_style(self):
-        return f"""
-            QRadioButton {{
-                color: {TEXT_PRIMARY}; font-size: 9.5pt;
-                spacing: 8px; background: transparent;
-            }}
-            QRadioButton::indicator {{
-                width: 14px; height: 14px;
-            }}
-        """
+    def _on_create_role_toggled(self):
+        if self._create_role_check is None:
+            return
+        show = self._create_role_check.isChecked()
+        self._role_caption.setVisible(show)
+        self.role_combo.setVisible(show)
 
-    def _on_mode_changed(self):
-        managed = self._mode_managed.isChecked()
-        self._role_caption.setVisible(managed)
-        self.role_combo.setVisible(managed)
+    def _refresh_manifest_status(self):
+        """Atualiza UI do agente baseado em existencia de CLAUDE.md/GEMINI.md no cwd."""
+        if not self._agent_kind or self._manifest_status is None:
+            return
+        manifest = AGENT_KINDS[self._agent_kind]["manifest"]
+        manifest_path = os.path.join(self._chosen_cwd, manifest)
+        self._manifest_detected = os.path.isfile(manifest_path)
+
+        if self._manifest_detected:
+            self._manifest_status.setText(
+                f"✓ {manifest} detectado nesta pasta — o agente vai usar o "
+                f"contexto do projeto. Nenhum role gerenciado necessario."
+            )
+            self._manifest_status.setStyleSheet(f"""
+                color: {TEXT_PRIMARY}; font-size: 9pt;
+                background: {BG_ELEVATED}; border: 1px solid {ACCENT};
+                border-radius: 6px; padding: 10px 12px;
+            """)
+            # Esconde a opcao de role
+            self._create_role_check.setVisible(False)
+            self._create_role_check.setChecked(False)
+            self._role_caption.setVisible(False)
+            self.role_combo.setVisible(False)
+        else:
+            self._manifest_status.setText(
+                f"⚠ Esta pasta nao tem {manifest}. Voce pode criar um role "
+                f"gerenciado pelo TermiCanvas (injetado como primeira mensagem "
+                f"ao agente)."
+            )
+            self._manifest_status.setStyleSheet(f"""
+                color: {TEXT_PRIMARY}; font-size: 9pt;
+                background: {BG_ELEVATED}; border: 1px solid {BORDER};
+                border-radius: 6px; padding: 10px 12px;
+            """)
+            self._create_role_check.setVisible(True)
+            # combo segue estado do checkbox
+            self._on_create_role_toggled()
 
     def _combo_style(self):
         return f"""
@@ -255,6 +294,7 @@ class TerminalLaunchDialog(QDialog):
     def _set_path(self, p):
         self._chosen_cwd = p
         self.path_label.setText(p)
+        self._refresh_manifest_status()
 
     def _browse(self):
         start = self._chosen_cwd if os.path.isdir(self._chosen_cwd) else DEFAULT_CWD
@@ -276,15 +316,24 @@ class TerminalLaunchDialog(QDialog):
         return self.icon_input.text().strip()
 
     def chosen_role(self):
-        if self.role_combo is None:
+        # Role so e usado quando manifest_mode == "managed"
+        if self.chosen_manifest_mode() != "managed" or self.role_combo is None:
             return None
         return self.role_combo.currentData()
 
     def chosen_manifest_mode(self):
-        """Retorna 'existing' ou 'managed' (so faz sentido pra agentes)."""
-        if self._mode_group is None:
+        """Retorna 'existing' ou 'managed'.
+
+        Regra:
+        - Se manifesto (CLAUDE.md/GEMINI.md) existe no cwd -> "existing" (sempre)
+        - Se nao existe E checkbox 'criar role' marcado -> "managed"
+        - Caso contrario -> "existing"
+        """
+        if self._create_role_check is None:
             return "existing"
-        return "managed" if self._mode_managed.isChecked() else "existing"
+        if self._manifest_detected:
+            return "existing"
+        return "managed" if self._create_role_check.isChecked() else "existing"
 
 
 class RoleEditorDialog(QDialog):

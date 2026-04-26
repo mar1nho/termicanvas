@@ -1,11 +1,18 @@
-"""Specs de CLIs de agente (Claude Code, Gemini CLI) e helpers de instalacao.
+"""Specs de CLIs de agente (Claude Code, Gemini CLI) e helpers de roles.
 
-Modos de manifesto:
-- "existing" — TermiCanvas nao toca em nada; o agente usa o CLAUDE.md/GEMINI.md
-              que ja existir no cwd (responsabilidade do projeto).
-- "managed"  — TermiCanvas escreve `<cwd>/.termicanvas/role.md` e anexa um bloco
-              delimitado no CLAUDE.md/GEMINI.md raiz com `@.termicanvas/role.md`.
-              Ao fechar o terminal, o bloco e removido.
+Aplicacao de role
+=================
+
+Quando o user opta por "criar role gerenciado" no modal (so disponivel quando
+o cwd NAO tem manifesto), o TermiCanvas escreve o role direto em
+`<cwd>/CLAUDE.md` (ou `GEMINI.md`). O agente le esse arquivo no startup como
+qualquer projeto normal — sem injecao de mensagem, sem poluir o terminal.
+
+Pra distinguir um manifesto gerado pelo TermiCanvas de um do projeto, o
+arquivo gerado tem o marker `TERMICANVAS_MARKER` na primeira linha. Spawns
+subsequentes sobrescrevem se o marker estiver presente; preservam se nao.
+
+O botao 📝 no header do agente abre `<cwd>/CLAUDE.md` no editor pra ajustar.
 """
 
 from pathlib import Path
@@ -13,9 +20,7 @@ from pathlib import Path
 from .roles import get_role
 
 
-# Marcadores do bloco gerenciado — substituiveis idempotentemente
-ROLE_BLOCK_BEGIN = "<!-- BEGIN TERMICANVAS-ROLE -->"
-ROLE_BLOCK_END   = "<!-- END TERMICANVAS-ROLE -->"
+TERMICANVAS_MARKER = "<!-- TermiCanvas managed role -->"
 
 
 # Specs das CLIs suportadas. Plugavel — adicionar nova CLI = nova entrada aqui.
@@ -37,22 +42,25 @@ AGENT_KINDS = {
 }
 
 
-def role_md_path(cwd):
-    """Caminho do role gerenciado dentro do projeto-alvo."""
-    return Path(cwd) / ".termicanvas" / "role.md"
-
-
-def install_role(cwd, agent_kind, role_name, mode="managed"):
-    """Aplica role no projeto. Retorna o path do arquivo gerenciado (ou None).
-
-    mode="existing": no-op. Agente usa o manifesto que ja existir.
-    mode="managed":  cria/atualiza .termicanvas/role.md com conteudo do role,
-                     e anexa @.termicanvas/role.md ao CLAUDE.md raiz dentro
-                     de um bloco delimitado.
-    """
+def managed_manifest_path(cwd, agent_kind):
+    """Caminho do CLAUDE.md/GEMINI.md gerenciado pelo TermiCanvas no cwd."""
     if agent_kind not in AGENT_KINDS:
         return None
-    if mode != "managed":
+    return Path(cwd) / AGENT_KINDS[agent_kind]["manifest"]
+
+
+def install_role(cwd, agent_kind, role_name, mode="managed", node_id=None):
+    """Aplica role no projeto. Retorna o path do manifesto criado/atualizado.
+
+    mode="existing": no-op. Agente usa o manifesto que ja existe (se existir).
+    mode="managed":  escreve role + skill instructions em `<cwd>/CLAUDE.md`
+                     (ou GEMINI.md). Sobrescreve apenas se o arquivo nao existir
+                     OU se ja foi gerado pelo TermiCanvas (tem TERMICANVAS_MARKER
+                     na primeira linha). Nunca pisa em manifesto do projeto.
+
+    `node_id` e aceito por compat mas nao usado — agora ha 1 manifesto por cwd.
+    """
+    if agent_kind not in AGENT_KINDS or mode != "managed":
         return None
 
     cwd_path = Path(cwd)
@@ -60,101 +68,49 @@ def install_role(cwd, agent_kind, role_name, mode="managed"):
         return None
 
     role = get_role(role_name) if role_name else None
-    role_content = role.content if role else "# Role livre\n\nResponda em portugues, de forma direta.\n"
+    role_body = role.content if role else "# Role livre\n\nResponda em portugues, de forma direta.\n"
+    role_label = role_name or "Livre"
 
-    role_content_with_skill = (
-        role_content
+    full_content = (
+        f"{TERMICANVAS_MARKER}\n\n"
+        f"# Agente — role: {role_label}\n\n"
+        + role_body
         + "\n\n---\n\n"
         + _send_skill_instructions()
     )
 
-    # 1. Escreve .termicanvas/role.md
-    role_path = role_md_path(cwd_path)
-    role_path.parent.mkdir(parents=True, exist_ok=True)
+    target = managed_manifest_path(cwd_path, agent_kind)
+    if target is None:
+        return None
+
+    # Preserva manifesto que NAO foi gerado pelo TermiCanvas
+    if target.exists():
+        try:
+            head = target.read_text(encoding="utf-8").splitlines()[:1]
+        except Exception:
+            return target
+        if not head or TERMICANVAS_MARKER not in head[0]:
+            # arquivo do projeto — nao toca
+            return target
+
     try:
-        role_path.write_text(role_content_with_skill, encoding="utf-8")
+        target.write_text(full_content, encoding="utf-8")
     except Exception:
         return None
 
-    # 2. Anexa bloco delimitado ao manifesto raiz
-    manifest_name = AGENT_KINDS[agent_kind]["manifest"]
-    root_manifest = cwd_path / manifest_name
-    _upsert_role_block(root_manifest, role_path)
-
-    return role_path
+    return target
 
 
-def remove_role_block(cwd, agent_kind):
-    """Remove o bloco delimitado do CLAUDE.md/GEMINI.md raiz.
-
-    Idempotente. Nao apaga .termicanvas/role.md (preserva edicoes do user).
-    """
-    if agent_kind not in AGENT_KINDS:
-        return
-    manifest_name = AGENT_KINDS[agent_kind]["manifest"]
-    root_manifest = Path(cwd) / manifest_name
-    if not root_manifest.exists():
-        return
+def is_managed_manifest(cwd, agent_kind):
+    """True se o manifesto no cwd foi gerado pelo TermiCanvas."""
+    target = managed_manifest_path(cwd, agent_kind)
+    if not target or not target.exists():
+        return False
     try:
-        text = root_manifest.read_text(encoding="utf-8")
+        head = target.read_text(encoding="utf-8").splitlines()[:1]
     except Exception:
-        return
-
-    new_text = _strip_role_block(text)
-    if new_text == text:
-        return  # bloco nao estava presente
-
-    try:
-        # Se ficou vazio (so tinha o bloco), apaga o arquivo
-        if new_text.strip():
-            root_manifest.write_text(new_text, encoding="utf-8")
-        else:
-            root_manifest.unlink()
-    except Exception:
-        pass
-
-
-def _upsert_role_block(manifest_path, role_path):
-    """Cria/atualiza o bloco TERMICANVAS-ROLE no manifesto raiz."""
-    block = (
-        f"\n{ROLE_BLOCK_BEGIN}\n"
-        f"@.termicanvas/role.md\n"
-        f"{ROLE_BLOCK_END}\n"
-    )
-
-    if manifest_path.exists():
-        try:
-            current = manifest_path.read_text(encoding="utf-8")
-        except Exception:
-            return
-        stripped = _strip_role_block(current)
-        new_text = stripped.rstrip() + "\n" + block
-    else:
-        new_text = block.lstrip()
-
-    try:
-        manifest_path.write_text(new_text, encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _strip_role_block(text):
-    """Remove qualquer bloco BEGIN/END TERMICANVAS-ROLE existente."""
-    if ROLE_BLOCK_BEGIN not in text:
-        return text
-    out = []
-    skipping = False
-    for line in text.splitlines(keepends=True):
-        stripped = line.strip()
-        if stripped == ROLE_BLOCK_BEGIN:
-            skipping = True
-            continue
-        if stripped == ROLE_BLOCK_END:
-            skipping = False
-            continue
-        if not skipping:
-            out.append(line)
-    return "".join(out)
+        return False
+    return bool(head and TERMICANVAS_MARKER in head[0])
 
 
 def _send_skill_instructions():

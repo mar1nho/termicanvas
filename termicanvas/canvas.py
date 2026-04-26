@@ -1,6 +1,6 @@
 """CanvasView (infinito, zoom/pan) + CanvasNav (overlay de navegacao)."""
 
-from PyQt6.QtCore import QEvent, QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .agent import AgentWidget
+from .icons import get_icon
 from .node import NodeFrame
 from .terminal import TerminalWidget
 from .tokens import (
@@ -347,6 +348,9 @@ class CanvasView(QGraphicsView):
 
             item = self.itemAt(event.position().toPoint())
             if item is None:
+                # Clique no fundo do canvas: tira o foco de qualquer node
+                # (indicador de idle/ativo segue o foco) + inicia pan
+                self._focus(None)
                 self._panning   = True
                 self._pan_start = event.position().toPoint()
                 self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -482,17 +486,20 @@ class CanvasNav(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        tooltips = {"−": "Zoom out", "+": "Zoom in", "1:1": "Resetar zoom", "⊞": "Encaixar tudo"}
-        for label, slot in [
-            ("−",  canvas.zoom_out),
-            ("+",  canvas.zoom_in),
-            ("1:1", canvas.reset_view),
-            ("⊞",  canvas.fit_all),
-        ]:
-            b = QPushButton(label)
+        nav_specs = [
+            ("minus",  "Zoom out",       canvas.zoom_out,   None),
+            ("plus",   "Zoom in",        canvas.zoom_in,    None),
+            (None,     "Resetar zoom",   canvas.reset_view, "1:1"),
+            ("square", "Encaixar tudo",  canvas.fit_all,    None),
+        ]
+        for icon_name, tooltip, slot, text in nav_specs:
+            b = QPushButton(text or "")
             b.setFixedSize(32, 32)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setToolTip(tooltips[label])
+            b.setToolTip(tooltip)
+            if icon_name:
+                b.setIcon(get_icon(icon_name, color=TEXT_SECONDARY, size=14))
+                b.setIconSize(QSize(14, 14))
             b.clicked.connect(slot)
             self._buttons.append(b)
             layout.addWidget(b)

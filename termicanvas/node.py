@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .icons import get_icon
 from .tokens import (
     ACCENT,
     BG_ELEVATED,
@@ -48,6 +49,7 @@ class NodeHeader(QWidget):
         self._dragging     = False
         self._last_global  = None
         self._accent_color = ACCENT
+        self._is_focused   = False  # alimenta o indicador idle/ativo
         self._apply_style()
 
         layout = QHBoxLayout(self)
@@ -55,8 +57,8 @@ class NodeHeader(QWidget):
         layout.setSpacing(10)
 
         self.dot = QLabel("●")
-        self.dot.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt; background: transparent;")
         layout.addWidget(self.dot)
+        self._refresh_dot()
 
         self.icon = EditableLabel(icon)
         self.icon.set_label_style(
@@ -100,22 +102,25 @@ class NodeHeader(QWidget):
         self.font_up_btn.hide()
         layout.addWidget(self.font_up_btn)
 
-        self.role_btn = QPushButton("📝")
+        self.role_btn = QPushButton()
+        self.role_btn.setIcon(get_icon("edit", color=TEXT_MUTED, size=14))
+        self.role_btn.setIconSize(QSize(14, 14))
         self.role_btn.setFixedSize(22, 22)
         self.role_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.role_btn.setToolTip("Editar role gerenciado (.termicanvas/role.md)")
         self.role_btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {TEXT_MUTED};
-                border: none; font-size: 11pt; padding: 0;
+                background: transparent;
+                border: none; padding: 0;
             }}
-            QPushButton:hover {{ color: {TEXT_PRIMARY}; }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; border-radius: 2px; }}
         """)
         self.role_btn.clicked.connect(self.edit_role_clicked.emit)
         self.role_btn.hide()
         layout.addWidget(self.role_btn)
 
-        self.auto_reply_btn = QPushButton("🔁")
+        self.auto_reply_btn = QPushButton()
+        self.auto_reply_btn.setIconSize(QSize(14, 14))
         self.auto_reply_btn.setFixedSize(22, 22)
         self.auto_reply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.auto_reply_btn.setCheckable(True)
@@ -134,13 +139,15 @@ class NodeHeader(QWidget):
         self._update_color_btn()
         layout.addWidget(self.color_btn)
 
-        self.close_btn = QPushButton("×")
+        self.close_btn = QPushButton()
+        self.close_btn.setIcon(get_icon("close", color=TEXT_SECONDARY, size=14))
+        self.close_btn.setIconSize(QSize(14, 14))
         self.close_btn.setFixedSize(22, 22)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: {TEXT_SECONDARY};
-                          border: none; font-size: 16pt; font-weight: 300; padding-bottom: 3px; }}
-            QPushButton:hover {{ background: {DANGER}; color: white; border-radius: 2px; }}
+            QPushButton {{ background: transparent;
+                          border: none; padding: 0; }}
+            QPushButton:hover {{ background: {DANGER}; border-radius: 2px; }}
         """)
         self.close_btn.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self.close_btn)
@@ -206,31 +213,51 @@ class NodeHeader(QWidget):
     def _update_auto_reply_btn_style(self):
         on = self.auto_reply_btn.isChecked()
         bg     = SUCCESS if on else "transparent"
-        color  = "white" if on else TEXT_MUTED
+        icon_color = "white" if on else TEXT_MUTED
+        self.auto_reply_btn.setIcon(get_icon("reply", color=icon_color, size=14))
         self.auto_reply_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {bg}; color: {color};
+                background: {bg};
                 border: none; border-radius: 2px;
-                font-size: 11pt; padding: 0;
+                padding: 0;
             }}
-            QPushButton:hover {{ color: {TEXT_PRIMARY}; }}
-            QPushButton:checked {{ background: {SUCCESS}; color: white; }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; }}
+            QPushButton:checked {{ background: {SUCCESS}; }}
+            QPushButton:checked:hover {{ background: {SUCCESS}; }}
         """)
 
     def _apply_style(self):
         self.setStyleSheet(f"""
             NodeHeader {{ background: {BG_ELEVATED};
-                         border-bottom: 1px solid {BORDER}; }}
+                         border-bottom: 1px solid {BORDER};
+                         border-top-left-radius: 6px;
+                         border-top-right-radius: 6px; }}
         """)
 
     def set_focused(self, focused):
-        color  = self._accent_color if focused else TEXT_MUTED
-        self.dot.setStyleSheet(f"color: {color}; font-size: 9pt; background: transparent;")
+        """Foco visual no nó: título e dot indicador."""
+        self._is_focused = bool(focused)
+        # Titulo
         tcolor = TEXT_PRIMARY if focused else TEXT_SECONDARY
         self.title.set_label_style(
             f"QLabel {{ color: {tcolor}; font-family: 'Segoe UI';"
             f"font-size: 10pt; font-weight: 500; background: transparent; }}"
         )
+        # Dot — verde glowing quando focado, azul muted quando nao
+        self._refresh_dot()
+
+    def _refresh_dot(self):
+        if self._is_focused:
+            # ativo: verde brilhante, fonte maior, bold (efeito glow)
+            self.dot.setStyleSheet(
+                f"color: {SUCCESS}; font-size: 11pt; font-weight: bold;"
+                f" background: transparent;"
+            )
+        else:
+            # idle: azul muted
+            self.dot.setStyleSheet(
+                "color: #3a5a8a; font-size: 9pt; background: transparent;"
+            )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -335,7 +362,7 @@ class NodeFrame(QFrame):
         border = safe_border_color(self._node_color) if self._focused else BORDER
         width  = 2 if self._focused else 1
         self.setStyleSheet(f"""
-            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 0px; }}
+            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 6px; }}
         """)
 
     def set_node_color(self, color, custom=False):

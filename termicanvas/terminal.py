@@ -11,8 +11,8 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 class _HistoryScreen(pyte.HistoryScreen):
     def select_graphic_rendition(self, *attrs, private=False, **kwargs):
         super().select_graphic_rendition(*attrs)
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QApplication, QPlainTextEdit
+from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from . import agents
 from .config import DEFAULT_CWD
@@ -26,12 +26,94 @@ except ImportError:
 
 PS_PROMPT_RE = re.compile(r"PS\s+[A-Za-z]:\\[^>]*>\s*$")
 
+ANSI_COLORS = {
+    "black":         "#000000",
+    "red":           "#cd3131",
+    "green":         "#0dbc79",
+    "yellow":        "#e5e510",
+    "blue":          "#2472c8",
+    "magenta":       "#bc3fbc",
+    "cyan":          "#11a8cd",
+    "white":         "#e5e5e5",
+    "brightblack":   "#666666",
+    "brightred":     "#f14c4c",
+    "brightgreen":   "#23d18b",
+    "brightyellow":  "#f5f543",
+    "brightblue":    "#3b8eea",
+    "brightmagenta": "#d670d6",
+    "brightcyan":    "#29b8db",
+    "brightwhite":   "#ffffff",
+    "default":       TEXT_PRIMARY,
+}
+
+_BASE_COLOR_NAMES = {"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"}
+
+
+# Linhas que NUNCA devem ir pra resposta automatica do agente —
+# sao chrome de TUIs (claude code statusline, separadores, prompts vazios).
+_CHROME_KEYWORDS = (
+    "Session ", "Weekly ", "Sonnet ", "Opus ", "Haiku ", "Context ",
+    "Concocting", "Tip:", "thought for", "tokens", "↓", "↑", "✶",
+    "claude.de/desktop", "Run Claude Code", "shift+tab",
+)
+_BOX_DRAWING = set("─━┓┛┃║╔╗╚╝╦╠╣╬│┴┬┼├┤┌┐└┘═")
+
+
+def _is_chrome_line(line):
+    s = line.strip()
+    if not s:
+        return True
+    # box-drawing puro (separadores)
+    visible = [c for c in s if not c.isspace()]
+    if visible and all(c in _BOX_DRAWING for c in visible):
+        return True
+    # statusline / dicas / overlays do claude code
+    if any(kw in s for kw in _CHROME_KEYWORDS):
+        return True
+    # prompt vazio
+    if s in ("❯", ">", "▏"):
+        return True
+    return False
+
+
+def _clean_tui_response(raw):
+    """Filtra chrome de TUI (statusline, separadores) e o eco da injecao.
+
+    Pega so o miolo da resposta do agente e limita o tamanho pra nao inundar
+    o emissor.
+    """
+    if not raw:
+        return ""
+    lines = raw.splitlines()
+    cleaned = []
+    for line in lines:
+        if _is_chrome_line(line):
+            continue
+        stripped = line.strip()
+        # eco da mensagem injetada (ex: "[de: Lider] ...") — pular
+        if stripped.startswith("[de:"):
+            continue
+        # bullet do claude (●) opcional — remove pra resposta limpa
+        if stripped.startswith("●"):
+            stripped = stripped.lstrip("● ").strip()
+        if stripped:
+            cleaned.append(stripped)
+
+    response = "\n".join(cleaned).strip()
+    # cap em 2000 chars
+    if len(response) > 2000:
+        response = response[:1997] + "..."
+    # se ficou trivial demais, ignora
+    if len(response) < 3:
+        return ""
+    return response
+
 
 class PtyBridge(QObject):
     data_received = pyqtSignal(str)
 
 
-class TerminalWidget(QPlainTextEdit):
+class TerminalWidget(QTextEdit):
     activity_changed = pyqtSignal(str)
 
     COLS      = 100
@@ -72,14 +154,14 @@ class TerminalWidget(QPlainTextEdit):
         self._startup_sent    = False
         self._font_size = 10
 
-        font = QFont("Cascadia Mono", self._font_size)
-        if not font.exactMatch():
-            font = QFont("Consolas", self._font_size)
+        font = QFont()
+        font.setFamilies(["Cascadia Mono", "Consolas", "Courier New"])
+        font.setPointSize(self._font_size)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
 
         self.setStyleSheet(f"""
-            QPlainTextEdit {{
+            QTextEdit {{
                 background: {BG_TERMINAL};
                 color: {TEXT_PRIMARY};
                 border: none;
@@ -102,11 +184,15 @@ class TerminalWidget(QPlainTextEdit):
         """)
         self.setUndoRedoEnabled(False)
         self.setReadOnly(True)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.setCursorWidth(2)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        # Detecta scroll manual pra alternar _auto_scroll. Mudanca programatica
+        # (durante _render) e suprimida via _programmatic_scroll flag.
+        self.verticalScrollBar().valueChanged.connect(self._on_scrollbar_changed)
 
         self.screen = _HistoryScreen(self.COLS, self.ROWS, history=self.HISTORY, ratio=0.5)
         self.stream = pyte.Stream(self.screen)
@@ -120,10 +206,19 @@ class TerminalWidget(QPlainTextEdit):
         self._resize_timer.setInterval(150)
         self._resize_timer.timeout.connect(self._do_resize)
 
+        # Estado de scroll: True = segue auto pro fundo. Vira False quando o
+        # user rola pra cima manualmente (wheel/scrollbar drag), e volta True
+        # quando user rola de volta pro fim. Substitui o at_bottom recalculado
+        # a cada frame, que era fragil (uma frame errada lockava a posicao).
+        self._auto_scroll          = True
+        self._programmatic_scroll  = False  # suprime detecao durante setValue interno
+
         self._render_dirty = False
         self._last_content = ""
         self._render_timer = QTimer(self)
-        self._render_timer.setInterval(33)
+        # 80ms = ~12fps. Suave o suficiente pra terminal e bem mais leve que 33ms
+        # (rebuild colorido do documento e caro com TUI animado).
+        self._render_timer.setInterval(80)
         self._render_timer.timeout.connect(self._flush_render)
         self._render_timer.start()
 
@@ -155,7 +250,7 @@ class TerminalWidget(QPlainTextEdit):
             if self.agent_kind and target_cwd:
                 agents.install_role(
                     target_cwd, self.agent_kind, self.role_name,
-                    mode=self.manifest_mode,
+                    mode=self.manifest_mode, node_id=self.node_id,
                 )
 
             if self.env_extra:
@@ -200,39 +295,46 @@ class TerminalWidget(QPlainTextEdit):
     def _fire_startup(self):
         """Callback do timer de silencio (900ms sem dados novos).
 
-        Tres trabalhos:
-        1. Sobe a CLI do agente na primeira vez (startup_command pendente).
-        2. Marca como idle pra que o bus possa entregar (CLIs com prompt proprio).
-        3. Se auto_reply ativo + tem pending_reply_to: captura resposta gerada
-           desde a injecao e envia de volta ao emissor via bus.
+        Tres estagios:
+        1. Sobe a CLI do agente na primeira vez. Quando agent_kind, prefixa `cls`
+           pra limpar o welcome banner do shell antes do TUI do claude/gemini.
+        2. Marca como idle pra que o bus possa entregar mensagens.
+        3. Auto_reply: se pending_reply_to + bus_ref, captura resposta e envia
+           de volta ao emissor.
         """
         if not self.alive:
             return
+
+        # Stage 1: sobe CLI do agente (com cls antes pra limpar o shell)
         if self._startup_command and not self._startup_sent:
             self._startup_sent = True
-            self.send(self._startup_command)
+            cmd = (
+                f"cls; {self._startup_command}"
+                if self.agent_kind else self._startup_command
+            )
+            self.send(cmd)
             return
 
+        # Stage 2: marca idle
         if self.activity:
             self.activity = ""
             self.activity_changed.emit("")
 
-        # Auto-responder: enviar resposta capturada
+        # Stage 3: auto-responder
         if self._pending_reply_to and self._bus_ref:
             self._dispatch_reply()
 
     def _dispatch_reply(self):
-        """Captura texto novo desde a injecao e envia ao emissor via bus."""
+        """Captura texto novo desde a injecao, filtra chrome do TUI e envia."""
         try:
             current = self._last_content
             baseline = self._reply_baseline or ""
-            # Diff por suffixo: pega tudo que veio depois do baseline
             if current.startswith(baseline):
-                response = current[len(baseline):]
+                new_text = current[len(baseline):]
             else:
-                # Buffer pode ter rolado — pega ultimas N linhas
-                response = "\n".join(current.splitlines()[-20:])
-            response = response.strip()
+                new_text = "\n".join(current.splitlines()[-30:])
+
+            response = _clean_tui_response(new_text)
             if response and self._bus_ref:
                 self._bus_ref.enqueue(self.node_id, self._pending_reply_to, response)
         except Exception:
@@ -255,43 +357,133 @@ class TerminalWidget(QPlainTextEdit):
     def _row_to_str(self, row, width):
         return "".join(row[x].data for x in range(width)).rstrip()
 
-    def _render(self):
-        sb = self.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
+    def _row_to_runs(self, row, width):
+        """Converte uma row do pyte em [(text, fg_hex), ...] agrupando por cor."""
+        runs = []
+        current_text = []
+        current_fg = None
+        for x in range(width):
+            try:
+                cell = row[x]
+            except (IndexError, KeyError):
+                ch = " "
+                fg_name = "default"
+                bold = False
+            else:
+                ch = cell.data or " "
+                fg_name = (cell.fg or "default")
+                bold = bool(getattr(cell, "bold", False))
+            fg_hex = ANSI_COLORS.get(fg_name)
+            if fg_hex is None:
+                # cores diretas (hex sem #) que pyte às vezes devolve
+                if isinstance(fg_name, str) and len(fg_name) == 6:
+                    try:
+                        int(fg_name, 16)
+                        fg_hex = "#" + fg_name
+                    except ValueError:
+                        fg_hex = ANSI_COLORS["default"]
+                else:
+                    fg_hex = ANSI_COLORS["default"]
+            if bold and fg_name in _BASE_COLOR_NAMES:
+                fg_hex = ANSI_COLORS.get(f"bright{fg_name}", fg_hex)
+            if fg_hex != current_fg:
+                if current_text:
+                    runs.append(("".join(current_text), current_fg))
+                current_text = []
+                current_fg = fg_hex
+            current_text.append(ch)
+        if current_text:
+            runs.append(("".join(current_text), current_fg))
+        # Trim trailing whitespace-only runs (mantém visual igual ao rstrip antigo)
+        while runs and runs[-1][0].rstrip() == "":
+            runs.pop()
+        return runs
 
+    def _on_scrollbar_changed(self, value):
+        """Detecta scroll manual do user pra alternar _auto_scroll.
+
+        - User rola ate o fim -> _auto_scroll = True (retoma auto-follow)
+        - User rola pra cima  -> _auto_scroll = False (preserva posicao)
+        - Mudancas programaticas (durante _render) sao ignoradas via flag.
+        """
+        if self._programmatic_scroll:
+            return
+        sb = self.verticalScrollBar()
+        self._auto_scroll = (value >= sb.maximum() - 4)
+
+    def _render(self):
         history_top    = list(self.screen.history.top)
         history_bottom = list(self.screen.history.bottom)
 
-        history_lines  = [self._row_to_str(r, self.screen.columns) for r in history_top]
-        history_lines += [self._row_to_str(r, self.screen.columns) for r in history_bottom]
+        all_rows = []  # list[list[(text, fg_hex)]]
+        for r in history_top:
+            all_rows.append(self._row_to_runs(r, self.screen.columns))
+        for r in history_bottom:
+            all_rows.append(self._row_to_runs(r, self.screen.columns))
 
-        screen_lines = [
-            self._row_to_str(self.screen.buffer[y], self.screen.columns)
-            for y in range(self.screen.lines)
+        history_count = len(all_rows)
+
+        for y in range(self.screen.lines):
+            all_rows.append(self._row_to_runs(self.screen.buffer[y], self.screen.columns))
+
+        # Trim trailing empty rows
+        while all_rows and not all_rows[-1]:
+            all_rows.pop()
+
+        plain_lines = [
+            "".join(text for text, _fg in runs).rstrip()
+            for runs in all_rows
         ]
+        plain_content = "\n".join(plain_lines)
 
-        all_lines = history_lines + screen_lines
-        while all_lines and not all_lines[-1]:
-            all_lines.pop()
-        content = "\n".join(all_lines)
+        if plain_content == self._last_content:
+            # Sem mudanca de texto — nao mexe em scroll/cursor.
+            return
 
-        if content != self._last_content:
-            self._last_content = content
-            self.setPlainText(content)
+        # Snapshot ANTES do rebuild. Distancia do fundo preserva exatamente
+        # quantas linhas o user ve acima do bottom (mais robusto que ratio).
+        sb = self.verticalScrollBar()
+        old_scroll = sb.value()
+        old_max    = max(1, sb.maximum())
+        distance_from_bottom = max(0, old_max - old_scroll)
 
-        cursor_y    = len(history_lines) + self.screen.cursor.y
-        line_starts = [0]
-        for ln in all_lines[:-1]:
-            line_starts.append(line_starts[-1] + len(ln) + 1)
-        pos = len(content)
-        if cursor_y < len(line_starts):
-            pos = min(line_starts[cursor_y] + self.screen.cursor.x, len(content))
-        cur = self.textCursor()
-        cur.setPosition(pos)
-        self.setTextCursor(cur)
+        self._last_content = plain_content
+        # Suprime _on_scrollbar_changed durante o rebuild (clear/insert mexem
+        # no scroll varias vezes — sem isso o user_scrolled vira False e trava
+        # o auto-follow pra sempre).
+        self._programmatic_scroll = True
+        try:
+            self.setUpdatesEnabled(False)
+            try:
+                self.clear()
+                cursor = self.textCursor()
+                cursor.beginEditBlock()
+                default_fg = ANSI_COLORS["default"]
+                for i, runs in enumerate(all_rows):
+                    for text, fg in runs:
+                        fmt = QTextCharFormat()
+                        fmt.setForeground(QColor(fg or default_fg))
+                        cursor.insertText(text, fmt)
+                    if i < len(all_rows) - 1:
+                        cursor.insertBlock()
+                cursor.endEditBlock()
+            finally:
+                self.setUpdatesEnabled(True)
 
-        if at_bottom:
-            sb.setValue(sb.maximum())
+            if self._auto_scroll:
+                # API oficial Qt pra rolar pro fim — lida com lazy maximum
+                # corretamente. NAO usar setPosition(meio) + setValue(max),
+                # que fazia o widget rolar pra cursor no meio do documento.
+                cur = self.textCursor()
+                cur.movePosition(QTextCursor.MoveOperation.End)
+                self.setTextCursor(cur)
+                self.ensureCursorVisible()
+            else:
+                # User rolou pra cima — preserva distancia ate o fundo
+                new_max = sb.maximum()
+                sb.setValue(max(0, new_max - distance_from_bottom))
+        finally:
+            self._programmatic_scroll = False
 
     def _check_idle(self):
         last_line = self._row_to_str(
@@ -308,9 +500,8 @@ class TerminalWidget(QPlainTextEdit):
             if self.activity:
                 self.activity = ""
                 self.activity_changed.emit("")
-            if self._startup_command and not self._startup_sent:
-                self._startup_sent = True
-                QTimer.singleShot(200, lambda: self.send(self._startup_command))
+            # Startup do agente fica EXCLUSIVAMENTE no _fire_startup (com cls antes
+            # do claude/gemini) — evita rodar sem cls quando o regex casa rapido.
 
     def keyPressEvent(self, event):
         if not (self.pty and self.alive):
@@ -437,9 +628,9 @@ class TerminalWidget(QPlainTextEdit):
         self._apply_font()
 
     def _apply_font(self):
-        font = QFont("Cascadia Mono", self._font_size)
-        if not font.exactMatch():
-            font = QFont("Consolas", self._font_size)
+        font = QFont()
+        font.setFamilies(["Cascadia Mono", "Consolas", "Courier New"])
+        font.setPointSize(self._font_size)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
         QTimer.singleShot(0, self._schedule_resize)
@@ -493,9 +684,6 @@ class TerminalWidget(QPlainTextEdit):
                 self.pty.terminate(force=True)
             except Exception:
                 pass
-        # Limpa bloco gerenciado do CLAUDE.md/GEMINI.md raiz
-        if self.agent_kind and self.manifest_mode == "managed" and self.cwd:
-            try:
-                agents.remove_role_block(self.cwd, self.agent_kind)
-            except Exception:
-                pass
+        # Nao mexemos no CLAUDE.md/GEMINI.md raiz — role e injetado via mensagem
+        # inicial em vez de manifesto. O arquivo .termicanvas/role-<id>.md fica
+        # preservado pra reuso entre sessoes (e pra editor inline com botao 📝).

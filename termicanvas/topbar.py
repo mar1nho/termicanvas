@@ -3,7 +3,7 @@
 A lista de terminais abertos esta em TerminalsSidebar (sidebar.py).
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QColorDialog,
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .icons import get_icon
 from .tokens import (
     ACCENT,
     BG_ELEVATED,
@@ -53,18 +54,20 @@ class TopBar(QWidget):
         layout.setSpacing(0)
 
         # toggle da sidebar (sempre visivel — nao some quando sidebar colapsa)
-        self._sidebar_toggle = QPushButton("☰")
+        self._sidebar_toggle = QPushButton()
+        self._sidebar_toggle.setIcon(get_icon("menu", color=TEXT_SECONDARY, size=16))
+        self._sidebar_toggle.setIconSize(QSize(16, 16))
         self._sidebar_toggle.setFixedSize(32, 32)
         self._sidebar_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sidebar_toggle.setToolTip("Mostrar/ocultar lista de terminais")
         self._sidebar_toggle.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {TEXT_SECONDARY};
+                background: transparent;
                 border: 1px solid {BORDER}; border-radius: 2px;
-                font-size: 12pt;
+                padding: 0;
             }}
             QPushButton:hover {{
-                color: {TEXT_PRIMARY}; border-color: {BORDER_HOVER};
+                border-color: {BORDER_HOVER};
                 background: {BG_ELEVATED};
             }}
         """)
@@ -146,7 +149,7 @@ class TopBar(QWidget):
         b.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 2px;
+                border: 1px solid {BORDER}; border-radius: 6px;
                 padding: 0 12px; font-size: 9.5pt;
             }}
             QPushButton:hover {{

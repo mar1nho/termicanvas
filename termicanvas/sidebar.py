@@ -4,7 +4,7 @@ Substitui o TerminalsBar horizontal que ficava na topbar. Usa o mesmo TerminalCh
 adaptado para layout vertical.
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .icons import get_icon
 from .terminal import TerminalWidget
 from .tokens import (
     ACCENT,
@@ -22,6 +23,7 @@ from .tokens import (
     BG_SIDEBAR,
     BORDER,
     BORDER_HOVER,
+    DANGER,
     SUCCESS,
     TEXT_MUTED,
     TEXT_PRIMARY,
@@ -33,7 +35,8 @@ from .tokens import (
 class SidebarChip(QFrame):
     """Chip vertical para a sidebar — mais alto, full-width."""
 
-    clicked = pyqtSignal()
+    clicked         = pyqtSignal()
+    close_requested = pyqtSignal()
 
     def __init__(self, frame):
         super().__init__()
@@ -76,11 +79,31 @@ class SidebarChip(QFrame):
 
         layout.addLayout(text_col, 1)
 
+        self.close_btn = QPushButton()
+        self.close_btn.setIcon(get_icon("close", color=TEXT_MUTED, size=12))
+        self.close_btn.setIconSize(QSize(12, 12))
+        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent;
+                          border: none; padding: 0; }}
+            QPushButton:hover {{ background: {DANGER}; border-radius: 2px; }}
+        """)
+        self.close_btn.clicked.connect(self.close_requested.emit)
+        # impede que o clique no X dispare o foco do chip (mousePressEvent do pai)
+        self.close_btn.mousePressEvent = self._close_btn_mouse_press
+        layout.addWidget(self.close_btn)
+
+    def _close_btn_mouse_press(self, event):
+        # consome o evento para nao propagar ao chip (que emitiria 'clicked')
+        QPushButton.mousePressEvent(self.close_btn, event)
+        event.accept()
+
     def _apply_style(self, focused):
         border = safe_border_color(self._accent_color) if focused else BORDER
         bg     = BG_ELEVATED if focused else "transparent"
         self.setStyleSheet(f"""
-            #schip {{ background: {bg}; border: 1px solid {border}; border-radius: 2px; }}
+            #schip {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}
             #schip:hover {{ background: {BG_ELEVATED}; border-color: {BORDER_HOVER}; }}
         """)
 
@@ -219,6 +242,7 @@ class TerminalsSidebar(QWidget):
             if frame not in self.chips:
                 chip = SidebarChip(frame)
                 chip.clicked.connect(lambda f=frame: self.terminal_clicked.emit(f))
+                chip.close_requested.connect(lambda f=frame: canvas._close(f))
                 frame.inner.activity_changed.connect(
                     lambda act, c=chip: c.set_activity(act)
                 )

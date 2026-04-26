@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from termicanvas.agent import AgentWidget
-from termicanvas.agents import AGENT_KINDS, role_md_path
+from termicanvas.agents import AGENT_KINDS, managed_manifest_path
 from termicanvas.bus import Bus
 from termicanvas.canvas import CanvasView
 from termicanvas.config import DEFAULT_CWD, ensure_dirs, set_last_custom_cwd
@@ -240,11 +240,12 @@ class MainWindow(QMainWindow):
         frame.header.auto_reply_toggled.connect(terminal.set_auto_reply)
 
     def _open_role_editor(self, terminal):
-        if not terminal.cwd:
+        if not terminal.cwd or not terminal.agent_kind:
             return
-        path = role_md_path(terminal.cwd)
+        path = managed_manifest_path(terminal.cwd, terminal.agent_kind)
+        if path is None:
+            return
         if not path.exists():
-            # arquivo ainda nao foi criado (raro — install_role roda no spawn)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("# Role livre\n\nResponda em portugues, de forma direta.\n", encoding="utf-8")
         dlg = RoleEditorDialog(path, parent=self)
@@ -311,6 +312,7 @@ class MainWindow(QMainWindow):
         frame = self.canvas.add_node(t, chosen_name, size=(820, 540), icon=chosen_icon)
         self._register_terminal(t, frame, chosen_name)
         self._wire_role_editor(t, frame)
+        self._wire_agent_controls(t, frame)
         frame.header.title_changed.connect(
             lambda title, tid=t.node_id: self.bus.update_name(tid, title)
         )
