@@ -387,3 +387,386 @@ class MetricsCollector(QObject):
 
     def is_sustained_alert(self, node_id: str) -> bool:
         return self._sustained_alert_count.get(node_id, 0) >= 3
+
+
+# ---------- widget ----------
+
+import json
+from datetime import datetime
+
+from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+)
+
+
+class DebugMonitorWidget(QWidget):
+    """Node body widget that displays live diagnostics.
+
+    Composition root: hosts a MetricsCollector and renders 4 tabs (Overview,
+    Per-Terminal, Errors, Threads). Two header buttons (copy, save).
+
+    Lifecycle: shutdown() is called by CanvasView._close. It stops the
+    collector, disconnects signals, and deleteLater()s.
+    """
+
+    def __init__(self, canvas, bus, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._collector = MetricsCollector(canvas, bus)
+        self._collector.snapshot_ready.connect(self._on_snapshot)
+        self._latest_snapshot: Optional[MetricsSnapshot] = None
+
+        self.setStyleSheet(f"""
+            QWidget {{ background: {BG_SURFACE}; color: {TEXT_PRIMARY}; }}
+            QLabel {{ background: transparent; }}
+        """)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        # Action row (Copy / Save buttons)
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+
+        self._copy_btn = QPushButton("📋 Copy snapshot")
+        self._copy_btn.clicked.connect(self._copy_snapshot)
+        actions.addWidget(self._copy_btn)
+
+        self._save_btn = QPushButton("💾 Save JSON")
+        self._save_btn.clicked.connect(self._save_snapshot)
+        actions.addWidget(self._save_btn)
+
+        actions.addStretch(1)
+        outer.addLayout(actions)
+
+        # Tabs
+        self._tabs = QTabWidget(self)
+        outer.addWidget(self._tabs, 1)
+
+        self._build_overview_tab()
+        self._build_per_terminal_tab()
+        self._build_errors_tab()
+        self._build_threads_tab()
+
+    # ---------- tab construction ----------
+
+    def _build_overview_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._labels: dict[str, QLabel] = {}
+        self._sparks: dict[str, Sparkline] = {}
+
+        rows = [
+            ("rss",         "🧠 RAM",       "MB"),
+            ("cpu",         "🖥 CPU",       "%"),
+            ("n_nodes",     "📦 Nodes",     ""),
+            ("n_terminals", "🖥 Terminals", ""),
+            ("n_timers",    "⏱ Timers",    ""),
+            ("queue",       "📨 Queue",     ""),
+        ]
+        for key, label_text, unit in rows:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            lbl = QLabel(label_text)
+            lbl.setMinimumWidth(110)
+            row.addWidget(lbl)
+
+            val_lbl = QLabel("—")
+            val_lbl.setMinimumWidth(70)
+            f = QFont("Cascadia Mono")
+            f.setStyleHint(QFont.StyleHint.Monospace)
+            val_lbl.setFont(f)
+            self._labels[key] = val_lbl
+            row.addWidget(val_lbl)
+
+            spark = Sparkline()
+            self._sparks[key] = spark
+            row.addWidget(spark, 1)
+
+            layout.addLayout(row)
+
+        # Render times block
+        rt_label = QLabel("Render times")
+        rt_label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt; padding-top: 8px;")
+        layout.addWidget(rt_label)
+
+        for key, label_text in [("p50", "p50"), ("p95", "p95"), ("p99", "p99")]:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            lbl = QLabel(label_text)
+            lbl.setMinimumWidth(110)
+            row.addWidget(lbl)
+
+            val_lbl = QLabel("— ms")
+            val_lbl.setMinimumWidth(70)
+            f = QFont("Cascadia Mono")
+            f.setStyleHint(QFont.StyleHint.Monospace)
+            val_lbl.setFont(f)
+            self._labels[f"render_{key}"] = val_lbl
+            row.addWidget(val_lbl)
+            row.addStretch(1)
+            layout.addLayout(row)
+
+        self._histogram = Histogram()
+        layout.addWidget(self._histogram)
+        layout.addStretch(1)
+
+        self._tabs.addTab(page, "Overview")
+
+    def _build_per_terminal_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self._term_table = QTableWidget(0, 5)
+        self._term_table.setHorizontalHeaderLabels(
+            ["NAME", "RAW_BUF (KB)", "CHARS/s", "ACTIVITY", "ALIVE"]
+        )
+        self._term_table.horizontalHeader().setStretchLastSection(True)
+        self._term_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(self._term_table)
+
+        self._term_empty = QLabel("Nenhum terminal aberto.")
+        self._term_empty.setStyleSheet(f"color: {TEXT_MUTED}; padding: 20px;")
+        self._term_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._term_empty)
+
+        self._tabs.addTab(page, "Per-Terminal")
+
+    def _build_errors_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        controls = QHBoxLayout()
+        clear_btn = QPushButton("🗑 Limpar")
+        clear_btn.clicked.connect(self._clear_errors)
+        controls.addWidget(clear_btn)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        self._errors_view = QPlainTextEdit()
+        self._errors_view.setReadOnly(True)
+        f = QFont("Cascadia Mono")
+        f.setStyleHint(QFont.StyleHint.Monospace)
+        self._errors_view.setFont(f)
+        layout.addWidget(self._errors_view, 1)
+
+        self._tabs.addTab(page, "Errors")
+
+    def _build_threads_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        controls = QHBoxLayout()
+        refresh_btn = QPushButton("🔄 Atualizar agora")
+        refresh_btn.clicked.connect(self._refresh_threads)
+        controls.addWidget(refresh_btn)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        self._threads_view = QPlainTextEdit()
+        self._threads_view.setReadOnly(True)
+        f = QFont("Cascadia Mono")
+        f.setStyleHint(QFont.StyleHint.Monospace)
+        self._threads_view.setFont(f)
+        layout.addWidget(self._threads_view, 1)
+
+        self._tabs.addTab(page, "Threads")
+
+    # ---------- update slots ----------
+
+    @pyqtSlot(object)
+    def _on_snapshot(self, snap):
+        self._latest_snapshot = snap
+        # Overview labels
+        self._labels["rss"].setText(f"{snap.rss_mb:.1f} MB")
+        self._labels["cpu"].setText(f"{snap.cpu_pct:.1f} %")
+        self._labels["n_nodes"].setText(str(snap.n_nodes))
+        self._labels["n_terminals"].setText(str(snap.n_terminals))
+        self._labels["n_timers"].setText(str(snap.n_timers))
+        self._labels["queue"].setText(str(snap.queue_size))
+        self._labels["render_p50"].setText(f"{snap.render_p50_ms:.1f} ms")
+        self._labels["render_p95"].setText(f"{snap.render_p95_ms:.1f} ms")
+        self._labels["render_p99"].setText(f"{snap.render_p99_ms:.1f} ms")
+
+        # Sparklines
+        self._sparks["rss"].set_data(self._collector.rss_history)
+        self._sparks["cpu"].set_data(self._collector.cpu_history)
+        self._sparks["n_terminals"].set_data(self._collector.n_terminals_history)
+        self._sparks["queue"].set_data(self._collector.queue_history)
+        self._sparks["n_nodes"].set_data([])  # no history kept for nodes
+        self._sparks["n_timers"].set_data([])  # likewise
+
+        # Histogram from current samples
+        self._histogram.set_samples(diagnostics.iter_render_times())
+
+        # Per-terminal table
+        rows = list(snap.terminals)
+        self._term_empty.setVisible(len(rows) == 0)
+        self._term_table.setVisible(len(rows) > 0)
+        self._term_table.setRowCount(len(rows))
+        for r, tm in enumerate(rows):
+            self._term_table.setItem(r, 0, QTableWidgetItem(tm.name))
+            self._term_table.setItem(r, 1, QTableWidgetItem(str(tm.raw_buf_kb)))
+            cps_item = QTableWidgetItem(str(tm.chars_per_sec))
+            if self._collector.is_sustained_alert(tm.node_id):
+                cps_item.setForeground(QColor("#ff6b6b"))
+            self._term_table.setItem(r, 2, cps_item)
+            self._term_table.setItem(r, 3, QTableWidgetItem(tm.activity))
+            self._term_table.setItem(r, 4, QTableWidgetItem("✓" if tm.alive else "✗"))
+
+        # Errors tab — refresh on every tick (cheap; deque is bounded at 200)
+        self._refresh_errors_view()
+
+    def _refresh_errors_view(self):
+        records = diagnostics.iter_errors()
+        if not records:
+            self._errors_view.setPlainText("(nenhum erro registrado)")
+            return
+        chunks = []
+        for rec in records:
+            ts = datetime.fromtimestamp(rec.timestamp).strftime("%H:%M:%S")
+            chunks.append(
+                f"─── {ts} [{rec.source}] {rec.exc_type} ───\n"
+                f"{rec.message}\n\n"
+                f"{rec.stack}\n"
+            )
+        self._errors_view.setPlainText("\n".join(chunks))
+
+    def _refresh_threads(self):
+        import sys
+        import traceback
+        import threading as _threading
+        frames = sys._current_frames()
+        thread_lookup = {t.ident: t for t in _threading.enumerate()}
+        chunks = []
+        for tid, frame in frames.items():
+            t = thread_lookup.get(tid)
+            name = t.name if t else f"id-{tid}"
+            stack = "".join(traceback.format_stack(frame))
+            chunks.append(f"─── Thread {name} (id {tid}) ───\n{stack}")
+        self._threads_view.setPlainText("\n".join(chunks))
+
+    def _clear_errors(self):
+        diagnostics._errors.clear()
+        self._refresh_errors_view()
+
+    def _copy_snapshot(self):
+        if self._latest_snapshot is None:
+            return
+        snap = self._latest_snapshot
+        payload = {
+            "timestamp": snap.timestamp,
+            "rss_mb": snap.rss_mb,
+            "cpu_pct": snap.cpu_pct,
+            "n_terminals": snap.n_terminals,
+            "n_nodes": snap.n_nodes,
+            "n_timers": snap.n_timers,
+            "queue_size": snap.queue_size,
+            "render_p50_ms": snap.render_p50_ms,
+            "render_p95_ms": snap.render_p95_ms,
+            "render_p99_ms": snap.render_p99_ms,
+            "terminals": [
+                {
+                    "node_id": t.node_id,
+                    "name": t.name,
+                    "raw_buf_kb": t.raw_buf_kb,
+                    "chars_per_sec": t.chars_per_sec,
+                    "activity": t.activity,
+                    "alive": t.alive,
+                }
+                for t in snap.terminals
+            ],
+        }
+        QApplication.clipboard().setText(json.dumps(payload, indent=2))
+
+    def _save_snapshot(self):
+        if self._latest_snapshot is None:
+            return
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Salvar snapshot",
+            f"debug-snapshot-{ts}.json",
+            "JSON files (*.json)",
+        )
+        if not filename:
+            return
+
+        snap = self._latest_snapshot
+        payload = {
+            "snapshot": {
+                "timestamp": snap.timestamp,
+                "rss_mb": snap.rss_mb,
+                "cpu_pct": snap.cpu_pct,
+                "n_terminals": snap.n_terminals,
+                "n_nodes": snap.n_nodes,
+                "n_timers": snap.n_timers,
+                "queue_size": snap.queue_size,
+                "render_p50_ms": snap.render_p50_ms,
+                "render_p95_ms": snap.render_p95_ms,
+                "render_p99_ms": snap.render_p99_ms,
+                "terminals": [
+                    {
+                        "node_id": t.node_id,
+                        "name": t.name,
+                        "raw_buf_kb": t.raw_buf_kb,
+                        "chars_per_sec": t.chars_per_sec,
+                        "activity": t.activity,
+                        "alive": t.alive,
+                    }
+                    for t in snap.terminals
+                ],
+            },
+            "history": {
+                "rss": list(self._collector.rss_history),
+                "cpu": list(self._collector.cpu_history),
+                "n_terminals": list(self._collector.n_terminals_history),
+                "queue": list(self._collector.queue_history),
+                "render_p95_ms": list(self._collector.render_p95_history),
+            },
+            "errors": [
+                {
+                    "timestamp": r.timestamp,
+                    "source": r.source,
+                    "exc_type": r.exc_type,
+                    "message": r.message,
+                    "stack": r.stack,
+                }
+                for r in diagnostics.iter_errors()
+            ],
+            "render_times_ms": diagnostics.iter_render_times(),
+        }
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as e:
+            diagnostics.record_error("monitor.save_snapshot", e)
+
+    # ---------- lifecycle ----------
+
+    def shutdown(self):
+        """Called by CanvasView._close. Stop collector, disconnect signal,
+        deleteLater. Idempotent — safe to call twice."""
+        if self._collector is not None:
+            try:
+                self._collector.snapshot_ready.disconnect(self._on_snapshot)
+            except (TypeError, RuntimeError):
+                pass
+            self._collector.stop()
+            self._collector = None
+        self.deleteLater()
