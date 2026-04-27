@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ._debug import snapshot
 from .agent import AgentWidget
 from .icons import get_icon
 from .node import NodeFrame
@@ -274,6 +275,8 @@ class CanvasView(QGraphicsView):
                     self.focused_frame = None
                 break
         self.connections = [(s, t) for s, t in self.connections if s is not frame and t is not frame]
+        if getattr(self, "_bus_ref", None):
+            snapshot("close", self._bus_ref)
         self.nodes_changed.emit()
 
     def focus_and_center(self, frame):

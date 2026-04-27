@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from termicanvas._debug import snapshot
 from termicanvas.agent import AgentWidget
 from termicanvas.agents import AGENT_KINDS, managed_manifest_path
 from termicanvas.bus import Bus
@@ -82,6 +83,8 @@ class MainWindow(QMainWindow):
         self._terminal_counter = 0
 
         QTimer.singleShot(0, self._load_session)
+
+        snapshot("init", self.bus)
 
     # ---------- session restore ----------
 

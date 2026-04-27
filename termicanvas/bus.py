@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
+from ._debug import snapshot
 from .config import BUS_PORT_FILE, ensure_dirs
 
 
@@ -163,6 +164,7 @@ class Bus(QObject):
             pass
 
     def _process_queue(self):
+        snapshot("tick", self)
         if not self._queue:
             return
 
