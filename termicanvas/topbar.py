@@ -3,8 +3,11 @@
 A lista de terminais abertos esta em TerminalsSidebar (sidebar.py).
 """
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import (
+    QEasingCurve, QPropertyAnimation, QSize, Qt,
+    pyqtProperty, pyqtSignal,
+)
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QColorDialog,
     QFrame,
@@ -22,10 +25,97 @@ from .tokens import (
     BG_SURFACE,
     BORDER,
     BORDER_HOVER,
+    DANGER,
+    SUCCESS,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+
+
+class BusToggleButton(QWidget):
+    """Bolinha verde (ON) / vermelha pulsante (OFF) para o toggle do bus."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._state = True
+        self._glow = 0.0
+
+        self._anim = QPropertyAnimation(self, b"glow_intensity", self)
+        self._anim.setDuration(3000)
+        self._anim.setStartValue(0.0)
+        self._anim.setKeyValueAt(0.5, 1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._anim.setLoopCount(-1)
+
+        self._refresh_tooltip()
+
+    # -- glow animated property --
+    def _get_glow(self):
+        return self._glow
+
+    def _set_glow(self, value):
+        self._glow = float(value)
+        self.update()
+
+    glow_intensity = pyqtProperty(float, fget=_get_glow, fset=_set_glow)
+
+    # -- public API --
+    def set_state(self, enabled: bool):
+        self._state = bool(enabled)
+        self._refresh_tooltip()
+        if self._state:
+            self._anim.stop()
+            self._glow = 0.0
+        else:
+            self._anim.start()
+        self.update()
+
+    # -- internals --
+    def _refresh_tooltip(self):
+        if self._state:
+            self.setToolTip("Bus ligado · clique pra desligar")
+        else:
+            self.setToolTip("Bus desligado · clique pra ligar")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        cx, cy, r = 12, 12, 7
+        if self._state:
+            color = QColor(SUCCESS)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(color)
+            p.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+        else:
+            base = QColor(DANGER)
+            # outer ring (faint)
+            outer = QColor(base)
+            outer.setAlphaF(0.12 + 0.18 * self._glow)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(outer)
+            p.drawEllipse(cx - 12, cy - 12, 24, 24)
+            # inner ring
+            mid = QColor(base)
+            mid.setAlphaF(0.30 + 0.30 * self._glow)
+            p.setBrush(mid)
+            p.drawEllipse(cx - 10, cy - 10, 20, 20)
+            # solid core
+            p.setBrush(base)
+            p.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+        p.end()
 
 
 class TopBar(QWidget):
@@ -37,6 +127,7 @@ class TopBar(QWidget):
     add_debug          = pyqtSignal()
     accent_changed     = pyqtSignal(str)
     toggle_sidebar     = pyqtSignal()
+    bus_toggled        = pyqtSignal(bool)
 
     def __init__(self):
         super().__init__()
@@ -53,6 +144,13 @@ class TopBar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 16, 0)
         layout.setSpacing(0)
+
+        self._bus_button = BusToggleButton()
+        self._bus_button.clicked.connect(
+            lambda: self.bus_toggled.emit(not self._bus_button._state)
+        )
+        layout.addWidget(self._bus_button)
+        layout.addSpacing(8)
 
         # toggle da sidebar (sempre visivel — nao some quando sidebar colapsa)
         self._sidebar_toggle = QPushButton()
@@ -161,3 +259,6 @@ class TopBar(QWidget):
             QPushButton:pressed {{ background: {BG_SURFACE}; }}
         """)
         return b
+
+    def set_bus_state(self, enabled: bool):
+        self._bus_button.set_state(enabled)

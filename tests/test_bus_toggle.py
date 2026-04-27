@@ -155,3 +155,61 @@ def test_canvas_clear_all_swallows_shutdown_errors(qt_app):
     # must not raise
     canvas.clear_all(bus=MagicMock())
     assert canvas.proxies == []
+
+
+def test_bus_toggle_button_default_state_is_on(qt_app):
+    from termicanvas.topbar import BusToggleButton
+
+    btn = BusToggleButton()
+    assert btn._state is True
+    assert "ligado" in btn.toolTip().lower()
+
+
+def test_bus_toggle_button_set_state_updates_tooltip_and_animation(qt_app):
+    from termicanvas.topbar import BusToggleButton
+    from PyQt6.QtCore import QAbstractAnimation
+
+    btn = BusToggleButton()
+    btn.set_state(False)
+    assert btn._state is False
+    assert "desligado" in btn.toolTip().lower()
+    assert btn._anim.state() == QAbstractAnimation.State.Running
+
+    btn.set_state(True)
+    assert btn._state is True
+    assert btn._anim.state() == QAbstractAnimation.State.Stopped
+
+
+def test_bus_toggle_button_emits_clicked_signal(qt_app):
+    from termicanvas.topbar import BusToggleButton
+
+    btn = BusToggleButton()
+    fired = []
+    btn.clicked.connect(lambda: fired.append(True))
+
+    # simulate click
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+    ev = QMouseEvent(
+        QEvent.Type.MouseButtonPress, QPointF(12, 12), Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+    )
+    btn.mousePressEvent(ev)
+    assert fired == [True]
+
+
+def test_topbar_emits_bus_toggled_with_inverse_of_current_state(qt_app):
+    from termicanvas.topbar import TopBar
+
+    bar = TopBar()
+    received = []
+    bar.bus_toggled.connect(lambda enabled: received.append(enabled))
+
+    # default state is True; click should request False
+    bar._bus_button.clicked.emit()
+    assert received == [False]
+
+    # now flip to off, then click should request True
+    bar.set_bus_state(False)
+    bar._bus_button.clicked.emit()
+    assert received == [False, True]
