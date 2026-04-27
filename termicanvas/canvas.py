@@ -256,23 +256,25 @@ class CanvasView(QGraphicsView):
     GRID_STEP = 40
 
     def _drag(self, proxy, delta):
+        """Move livre durante drag — sem snap em tempo real (evita teleporte
+        no primeiro pixel + jitter). Snap acontece no _drag_end."""
         scale = self.transform().m11()
         if proxy not in self._virtual_pos:
             self._virtual_pos[proxy] = QPointF(proxy.pos())
         self._virtual_pos[proxy] += QPointF(delta.x() / scale, delta.y() / scale)
-        virt = self._virtual_pos[proxy]
+        proxy.setPos(self._virtual_pos[proxy])
 
-        if self._alt_held():
-            proxy.setPos(virt)
-        else:
+    def _drag_end(self, proxy):
+        """Snapa pra posicao mais proxima do grid — a menos que Alt esteja
+        segurado, caso em que mantem a posicao livre."""
+        virt = self._virtual_pos.pop(proxy, None)
+        if virt is not None and not self._alt_held():
             sx = round(virt.x() / self.GRID_STEP) * self.GRID_STEP
             sy = round(virt.y() / self.GRID_STEP) * self.GRID_STEP
             proxy.setPos(sx, sy)
 
-    def _drag_end(self, proxy):
-        self._virtual_pos.pop(proxy, None)
-
     def _resize_frame(self, frame, proxy, delta):
+        """Resize livre durante drag — snap acontece no _resize_end."""
         scale = self.transform().m11()
         if frame not in self._virtual_size:
             self._virtual_size[frame] = (float(frame.width()), float(frame.height()))
@@ -280,16 +282,16 @@ class CanvasView(QGraphicsView):
         vw += delta.x() / scale
         vh += delta.y() / scale
         self._virtual_size[frame] = (vw, vh)
-
-        new_w = max(260, int(vw))
-        new_h = max(180, int(vh))
-        if not self._alt_held():
-            new_w = max(260, round(new_w / self.GRID_STEP) * self.GRID_STEP)
-            new_h = max(180, round(new_h / self.GRID_STEP) * self.GRID_STEP)
-        frame.resize(new_w, new_h)
+        frame.resize(max(260, int(vw)), max(180, int(vh)))
 
     def _resize_end(self, frame):
-        self._virtual_size.pop(frame, None)
+        """Snapa o tamanho final pro grid — exceto se Alt segurado."""
+        size = self._virtual_size.pop(frame, None)
+        if size is not None and not self._alt_held():
+            vw, vh = size
+            new_w = max(260, round(vw / self.GRID_STEP) * self.GRID_STEP)
+            new_h = max(180, round(vh / self.GRID_STEP) * self.GRID_STEP)
+            frame.resize(new_w, new_h)
 
     def _alt_held(self):
         return bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
