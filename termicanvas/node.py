@@ -178,7 +178,11 @@ class NodeHeader(QWidget):
         """)
 
     def _pick_color(self):
-        color = QColorDialog.getColor(QColor(self._accent_color), self, "Cor da borda")
+        # NodeHeader lives inside a QGraphicsProxyWidget — passing `self` as the
+        # dialog parent makes Qt mis-position the modal and lose focus events.
+        # Use the top-level application window instead.
+        parent = QApplication.activeWindow()
+        color = QColorDialog.getColor(QColor(self._accent_color), parent, "Cor da borda")
         if color.isValid():
             self._accent_color = color.name()
             self._update_color_btn()
