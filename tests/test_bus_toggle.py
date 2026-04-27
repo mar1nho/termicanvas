@@ -75,3 +75,18 @@ def test_bus_off_dialog_has_cancel_and_confirm_buttons(qt_app):
     dlg = BusOffConfirmDialog()
     assert dlg._cancel_btn.text().lower() == "cancelar"
     assert "desligar" in dlg._confirm_btn.text().lower()
+
+
+def test_bus_off_dialog_buttons_resolve_correctly(qt_app):
+    """Cancel must produce Rejected; Desligar must produce Accepted.
+    Task 6's _show_bus_off_confirmation depends on this contract."""
+    from PyQt6.QtWidgets import QDialog
+    from termicanvas.dialogs import BusOffConfirmDialog
+
+    cancel_dlg = BusOffConfirmDialog()
+    cancel_dlg._cancel_btn.click()
+    assert cancel_dlg.result() == QDialog.DialogCode.Rejected
+
+    confirm_dlg = BusOffConfirmDialog()
+    confirm_dlg._confirm_btn.click()
+    assert confirm_dlg.result() == QDialog.DialogCode.Accepted
