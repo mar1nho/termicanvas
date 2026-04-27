@@ -251,6 +251,11 @@ class MetricsCollector(QObject):
         self._last_raw_buf_len: dict[str, int] = {}
         self._sustained_alert_count: dict[str, int] = {}
 
+        # Cache do n_timers — recomputar via app.allWidgets() todo tick e caro
+        # com muitos terminais abertos. Refresh a cada 5 ticks (5s).
+        self._cached_n_timers: int = 0
+        self._tick_count: int = 0
+
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
@@ -305,18 +310,25 @@ class MetricsCollector(QObject):
         live_terminals = [t for t in self._observed_terminals if self._safe_alive(t)]
         n_terminals = len(live_terminals)
 
-        # Count timers reachable from the app + bus
-        n_timers = 0
-        app = QApplication.instance()
-        if app is not None:
-            seen = set()
-            for w in app.allWidgets():
-                for t in w.findChildren(QTimer):
-                    seen.add(id(t))
-            if bus is not None:
-                for t in bus.findChildren(QTimer):
-                    seen.add(id(t))
-            n_timers = len(seen)
+        # Count timers reachable from the app + bus. Cached: refresh a cada 5
+        # ticks porque o app.allWidgets() e caro com muitos widgets abertos
+        # e o numero de timers nao churn rapido.
+        self._tick_count += 1
+        if self._tick_count % 5 == 1:
+            n_timers = 0
+            app = QApplication.instance()
+            if app is not None:
+                seen = set()
+                for w in app.allWidgets():
+                    for t in w.findChildren(QTimer):
+                        seen.add(id(t))
+                if bus is not None:
+                    for t in bus.findChildren(QTimer):
+                        seen.add(id(t))
+                n_timers = len(seen)
+            self._cached_n_timers = n_timers
+        else:
+            n_timers = self._cached_n_timers
 
         queue_size = len(getattr(bus, "_queue", [])) if bus else 0
 
