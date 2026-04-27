@@ -118,8 +118,8 @@ class TerminalWidget(QTextEdit):
 
     COLS      = 100
     ROWS      = 30
-    HISTORY   = 3000
-    RAW_LIMIT = 300_000  # chars — janela deslizante do stream bruto para re-feed no resize
+    HISTORY   = 1000
+    RAW_LIMIT = 100_000  # chars — janela deslizante do stream bruto para re-feed no resize
 
     def __init__(
         self,
