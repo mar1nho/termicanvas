@@ -9,7 +9,7 @@ from .tokens import ACCENT
 from .widgets import NoteWidget, PromptCard
 
 
-def save_session(canvas, accent_color=ACCENT):
+def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warned=False):
     nodes = []
     for proxy, frame in canvas.proxies:
         pos  = proxy.pos()
@@ -64,10 +64,12 @@ def save_session(canvas, accent_color=ACCENT):
 
     data = {
         "canvas": {
-            "scale":        canvas.transform().m11(),
-            "scroll_h":     canvas.horizontalScrollBar().value(),
-            "scroll_v":     canvas.verticalScrollBar().value(),
-            "accent_color": accent_color,
+            "scale":              canvas.transform().m11(),
+            "scroll_h":           canvas.horizontalScrollBar().value(),
+            "scroll_v":           canvas.verticalScrollBar().value(),
+            "accent_color":       accent_color,
+            "bus_enabled":        bool(bus_enabled),
+            "bus_toggle_warned":  bool(bus_toggle_warned),
         },
         "nodes": nodes,
         "connections": conns,
