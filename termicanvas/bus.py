@@ -67,6 +67,11 @@ class Bus(QObject):
                 self._server.shutdown()
             except Exception:
                 pass
+        self._nodes.clear()
+        try:
+            BUS_PORT_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def register(self, terminal, frame, name, agent_kind=None):
         node_id = uuid.uuid4().hex[:12]
