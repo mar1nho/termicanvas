@@ -274,6 +274,7 @@ class TerminalWidget(QTextEdit):
 
         self._render_dirty = False
         self._last_content = ""
+        self._last_rows: list = []  # ultimo all_rows renderizado, para diff incremental
         self._render_timer = QTimer(self)
         # 100ms = 10fps. Suave o suficiente pra terminal e -20% rebuilds vs 80ms
         # (rebuild colorido do documento e caro com TUI animado tipo claude code).
@@ -502,8 +503,6 @@ class TerminalWidget(QTextEdit):
         for r in history_bottom:
             all_rows.append(self._row_to_runs(r, self.screen.columns))
 
-        history_count = len(all_rows)
-
         for y in range(self.screen.lines):
             all_rows.append(self._row_to_runs(self.screen.buffer[y], self.screen.columns))
 
@@ -511,60 +510,105 @@ class TerminalWidget(QTextEdit):
         while all_rows and not all_rows[-1]:
             all_rows.pop()
 
-        plain_lines = [
-            "".join(text for text, _fg in runs).rstrip()
-            for runs in all_rows
-        ]
-        plain_content = "\n".join(plain_lines)
-
-        if plain_content == self._last_content:
+        last_rows = self._last_rows
+        if all_rows == last_rows:
             # Sem mudanca de texto — nao mexe em scroll/cursor.
             return
 
-        # Snapshot ANTES do rebuild. Distancia do fundo preserva exatamente
-        # quantas linhas o user ve acima do bottom (mais robusto que ratio).
+        # Diff: encontra primeiro indice que diverge. Em terminais a maioria
+        # das mudancas concentra na cauda (cursor, output novo) — incremental
+        # paga a pena quando >= metade do doc fica preservado.
+        common = min(len(all_rows), len(last_rows))
+        first_changed = 0
+        while first_changed < common and all_rows[first_changed] == last_rows[first_changed]:
+            first_changed += 1
+
         sb = self.verticalScrollBar()
         old_scroll = sb.value()
         old_max    = max(1, sb.maximum())
         distance_from_bottom = max(0, old_max - old_scroll)
 
-        self._last_content = plain_content
-        # Suprime _on_scrollbar_changed durante o rebuild (clear/insert mexem
-        # no scroll varias vezes — sem isso o user_scrolled vira False e trava
-        # o auto-follow pra sempre).
+        use_incremental = (
+            last_rows
+            and first_changed > 0
+            and first_changed >= len(last_rows) // 2
+        )
+
         self._programmatic_scroll = True
         try:
             self.setUpdatesEnabled(False)
             try:
-                self.clear()
-                cursor = self.textCursor()
-                cursor.beginEditBlock()
                 default_fg = ANSI_COLORS["default"]
-                for i, runs in enumerate(all_rows):
-                    for text, fg in runs:
-                        fmt = QTextCharFormat()
-                        fmt.setForeground(QColor(fg or default_fg))
-                        cursor.insertText(text, fmt)
-                    if i < len(all_rows) - 1:
-                        cursor.insertBlock()
-                cursor.endEditBlock()
+                if use_incremental:
+                    self._render_incremental(all_rows, first_changed, default_fg)
+                else:
+                    self._render_full(all_rows, default_fg)
             finally:
                 self.setUpdatesEnabled(True)
 
             if self._auto_scroll:
-                # API oficial Qt pra rolar pro fim — lida com lazy maximum
-                # corretamente. NAO usar setPosition(meio) + setValue(max),
-                # que fazia o widget rolar pra cursor no meio do documento.
                 cur = self.textCursor()
                 cur.movePosition(QTextCursor.MoveOperation.End)
                 self.setTextCursor(cur)
                 self.ensureCursorVisible()
             else:
-                # User rolou pra cima — preserva distancia ate o fundo
                 new_max = sb.maximum()
                 sb.setValue(max(0, new_max - distance_from_bottom))
         finally:
             self._programmatic_scroll = False
+
+        self._last_rows = all_rows
+        # _last_content e usado pelo auto_reply baseline em _dispatch_reply.
+        self._last_content = "\n".join(
+            "".join(text for text, _fg in runs).rstrip()
+            for runs in all_rows
+        )
+
+    def _render_full(self, all_rows, default_fg):
+        """Rebuild completo do QTextDocument — fallback quando o diff nao
+        compensa (mudanca grande na cabeca, scrollback, etc)."""
+        self.clear()
+        cursor = self.textCursor()
+        cursor.beginEditBlock()
+        for i, runs in enumerate(all_rows):
+            for text, fg in runs:
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(fg or default_fg))
+                cursor.insertText(text, fmt)
+            if i < len(all_rows) - 1:
+                cursor.insertBlock()
+        cursor.endEditBlock()
+
+    def _render_incremental(self, all_rows, first_changed, default_fg):
+        """Trunca o documento a partir do bloco first_changed e re-insere as
+        rows novas. Caso comum (cauda muda) fica O(rows_alteradas) em vez de
+        O(total_rows) que o full rebuild paga."""
+        doc = self.document()
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+
+        start_block = doc.findBlockByNumber(first_changed)
+        if start_block.isValid():
+            cursor.setPosition(start_block.position())
+            # Move 1 char atras pra incluir o paragraph separator do bloco anterior
+            # — sem isso sobra uma linha em branco entre o trecho preservado e o novo.
+            if first_changed > 0:
+                cursor.movePosition(QTextCursor.MoveOperation.PreviousCharacter)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.End,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            cursor.removeSelectedText()
+
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        for i in range(first_changed, len(all_rows)):
+            if i > 0:
+                cursor.insertBlock()
+            for text, fg in all_rows[i]:
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(fg or default_fg))
+                cursor.insertText(text, fmt)
+        cursor.endEditBlock()
 
     def _check_idle(self):
         last_line = self._row_to_str(
@@ -759,6 +803,8 @@ class TerminalWidget(QTextEdit):
             # Clamp do cursor para não estourar nova dimensão
             self.screen.cursor.x = min(self.screen.cursor.x, new_cols - 1)
             self.screen.cursor.y = min(self.screen.cursor.y, new_rows - 1)
+        # Force full rebuild apos resize — geometria nova invalida o diff cache.
+        self._last_rows = []
         self._render_dirty = True
         self._render()
 
