@@ -234,8 +234,10 @@ class MainWindow(QMainWindow):
         )
 
     def _wire_role_editor(self, terminal, frame):
-        """Habilita botao 'editar role' no header se for agente em modo managed."""
-        if not (terminal.agent_kind and terminal.manifest_mode == "managed" and terminal.cwd):
+        """Habilita botao 'editar role' no header de qualquer terminal de agente
+        que tenha cwd. Antes era so 'managed', mas isso escondia o botao em
+        toda pasta que ja tinha CLAUDE.md/GEMINI.md (caso super comum)."""
+        if not (terminal.agent_kind and terminal.cwd):
             return
         frame.header.show_role_btn()
         frame.header.edit_role_clicked.connect(
