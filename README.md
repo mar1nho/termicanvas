@@ -64,6 +64,7 @@ Ao clicar em `PowerShell / CMD / Claude / Gemini`, abre um modal com:
 
 ### Topbar
 
+- **Toggle do bus** — bolinha verde no canto esquerdo. Clique pra desligar o servidor de mensagens entre agentes; isso fecha todos os terminais e widgets do canvas e bota o app em modo enxuto. A bolinha fica vermelha pulsante quando desligado. Estado persiste entre sessões; o primeiro toggle pede confirmação com checkbox "não perguntar de novo"
 - Brand `TERMICANVAS`
 - Toggle da sidebar
 - Botões de criação rápida: `PowerShell`, `CMD`, `Claude`, `Gemini`, `Nota`, `Prompt`, `Agent`, `Debug`
