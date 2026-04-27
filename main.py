@@ -92,7 +92,10 @@ class MainWindow(QMainWindow):
         data = load_session()
         if not data:
             return
+        self._load_session_nodes(data)
+        self._apply_session_viewport(data)
 
+    def _load_session_nodes(self, data):
         for node in data.get("nodes", []):
             ntype = node.get("type")
             name  = node.get("name", "Terminal")
@@ -166,6 +169,14 @@ class MainWindow(QMainWindow):
                     proxy.setPos(x, y)
                     break
 
+        frame_list = [f for _, f in self.canvas.proxies]
+        for src_idx, tgt_idx in data.get("connections", []):
+            if 0 <= src_idx < len(frame_list) and 0 <= tgt_idx < len(frame_list):
+                self.canvas.connections.append((frame_list[src_idx], frame_list[tgt_idx]))
+
+        self._refresh_sidebar()
+
+    def _apply_session_viewport(self, data):
         cs = data.get("canvas", {})
         scale    = cs.get("scale", 1.0)
         scroll_h = cs.get("scroll_h", 0)
@@ -182,13 +193,6 @@ class MainWindow(QMainWindow):
             self.topbar._accent_color = accent
             self.topbar._update_swatch()
             self._on_accent_changed(accent)
-
-        frame_list = [f for _, f in self.canvas.proxies]
-        for src_idx, tgt_idx in data.get("connections", []):
-            if 0 <= src_idx < len(frame_list) and 0 <= tgt_idx < len(frame_list):
-                self.canvas.connections.append((frame_list[src_idx], frame_list[tgt_idx]))
-
-        self._refresh_sidebar()
 
     # ---------- helpers ----------
 
