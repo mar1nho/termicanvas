@@ -245,15 +245,28 @@ class CanvasView(QGraphicsView):
         self.nodes_changed.emit()
         return frame
 
+    GRID_STEP = 40
+
     def _drag(self, proxy, delta):
         scale = self.transform().m11()
-        proxy.moveBy(delta.x() / scale, delta.y() / scale)
+        new_x = proxy.pos().x() + delta.x() / scale
+        new_y = proxy.pos().y() + delta.y() / scale
+        if not self._alt_held():
+            new_x = round(new_x / self.GRID_STEP) * self.GRID_STEP
+            new_y = round(new_y / self.GRID_STEP) * self.GRID_STEP
+        proxy.setPos(new_x, new_y)
 
     def _resize_frame(self, frame, proxy, delta):
         scale = self.transform().m11()
         new_w = max(260, int(frame.width()  + delta.x() / scale))
         new_h = max(180, int(frame.height() + delta.y() / scale))
+        if not self._alt_held():
+            new_w = max(260, round(new_w / self.GRID_STEP) * self.GRID_STEP)
+            new_h = max(180, round(new_h / self.GRID_STEP) * self.GRID_STEP)
         frame.resize(new_w, new_h)
+
+    def _alt_held(self):
+        return bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
 
     def _focus(self, frame):
         for proxy, f in self.proxies:
