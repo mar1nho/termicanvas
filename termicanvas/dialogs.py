@@ -485,3 +485,160 @@ class BusOffConfirmDialog(QDialog):
 
     def dont_ask_again(self) -> bool:
         return self._dont_ask.isChecked()
+
+
+class SnapshotNameDialog(QDialog):
+    """Pede um nome para um novo snapshot. Validacao basica: nao-vazio.
+
+    Se initial_name for passado (modo renomear), pre-preenche o input.
+    """
+
+    def __init__(self, parent=None, initial_name: str = "", title: str = "Salvar snapshot",
+                 confirm_label: str = "Salvar"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_SIDEBAR}; }}
+            QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
+            QLineEdit {{
+                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 4px;
+                padding: 6px 8px;
+            }}
+            QLineEdit:focus {{ border-color: {ACCENT}; }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(14)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12pt; font-weight: 600;")
+        layout.addWidget(title_lbl)
+
+        layout.addWidget(QLabel("Nome:"))
+        self._input = QLineEdit(initial_name)
+        self._input.setPlaceholderText("ex: estudo claude, tarde focus, debug session")
+        self._input.returnPressed.connect(self._maybe_accept)
+        layout.addWidget(self._input)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._cancel_btn)
+
+        self._confirm_btn = QPushButton(confirm_label)
+        self._confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._confirm_btn.setDefault(True)
+        self._confirm_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT}; color: white; border: none;
+                border-radius: 4px; padding: 6px 16px;
+            }}
+            QPushButton:hover  {{ background: {ACCENT_HOVER}; }}
+            QPushButton:pressed {{ background: {ACCENT_PRESS}; }}
+        """)
+        self._confirm_btn.clicked.connect(self._maybe_accept)
+        btn_row.addWidget(self._confirm_btn)
+
+        layout.addLayout(btn_row)
+        self._input.setFocus()
+        self._input.selectAll()
+
+    def _maybe_accept(self):
+        if self.chosen_name():
+            self.accept()
+
+    def chosen_name(self) -> str:
+        return self._input.text().strip()
+
+
+class LoadSnapshotConfirmDialog(QDialog):
+    """Confirma carregar um snapshot — operacao destrutiva (fecha canvas atual).
+
+    Tres botoes: salvar e carregar / so carregar / cancelar. Mais checkbox
+    'nao perguntar de novo'. accepted() retorna 1 (so carregar) ou 2 (salvar
+    e carregar); rejected() = cancelar.
+    """
+
+    LOAD_ONLY = 1
+    SAVE_AND_LOAD = 2
+
+    def __init__(self, parent=None, snapshot_name: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Carregar snapshot")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_SIDEBAR}; }}
+            QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
+            QCheckBox {{ color: {TEXT_SECONDARY}; background: transparent; }}
+        """)
+
+        self._action = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(14)
+
+        title = QLabel(f"Carregar '{snapshot_name}'")
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12pt; font-weight: 600;")
+        layout.addWidget(title)
+
+        body = QLabel(
+            "Isso vai fechar todos os terminais e widgets do canvas atual.\n\n"
+            "Quer salvar o canvas atual como snapshot antes?"
+        )
+        body.setWordWrap(True)
+        layout.addWidget(body)
+
+        self._dont_ask = QCheckBox("Nao perguntar de novo")
+        layout.addWidget(self._dont_ask)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._cancel_btn)
+
+        self._load_only_btn = QPushButton("So carregar")
+        self._load_only_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._load_only_btn.clicked.connect(self._on_load_only)
+        btn_row.addWidget(self._load_only_btn)
+
+        self._save_load_btn = QPushButton("Salvar e carregar")
+        self._save_load_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._save_load_btn.setDefault(True)
+        self._save_load_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT}; color: white; border: none;
+                border-radius: 4px; padding: 6px 16px;
+            }}
+            QPushButton:hover  {{ background: {ACCENT_HOVER}; }}
+            QPushButton:pressed {{ background: {ACCENT_PRESS}; }}
+        """)
+        self._save_load_btn.clicked.connect(self._on_save_and_load)
+        btn_row.addWidget(self._save_load_btn)
+
+        layout.addLayout(btn_row)
+
+    def _on_load_only(self):
+        self._action = self.LOAD_ONLY
+        self.accept()
+
+    def _on_save_and_load(self):
+        self._action = self.SAVE_AND_LOAD
+        self.accept()
+
+    def chosen_action(self) -> int:
+        return self._action
+
+    def dont_ask_again(self) -> bool:
+        return self._dont_ask.isChecked()
