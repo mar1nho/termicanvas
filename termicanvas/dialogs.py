@@ -426,3 +426,62 @@ class RoleEditorDialog(QDialog):
             self.accept()
         except Exception as e:
             self.editor.setPlainText(self.editor.toPlainText() + f"\n\n[erro ao salvar: {e}]")
+
+
+class BusOffConfirmDialog(QDialog):
+    """Confirma o desligamento do bus (operacao destrutiva)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Desligar bus")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_SIDEBAR}; }}
+            QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
+            QCheckBox {{ color: {TEXT_SECONDARY}; background: transparent; }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(14)
+
+        title = QLabel("Desligar bus")
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12pt; font-weight: 600;")
+        layout.addWidget(title)
+
+        body = QLabel(
+            "Desligar o bus vai fechar todos os terminais e widgets do canvas.\n\n"
+            "Tem certeza?"
+        )
+        body.setWordWrap(True)
+        layout.addWidget(body)
+
+        self._dont_ask = QCheckBox("Nao perguntar de novo")
+        layout.addWidget(self._dont_ask)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._cancel_btn)
+
+        self._confirm_btn = QPushButton("Desligar")
+        self._confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._confirm_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT}; color: white; border: none;
+                border-radius: 4px; padding: 6px 16px;
+            }}
+            QPushButton:hover  {{ background: {ACCENT_HOVER}; }}
+            QPushButton:pressed {{ background: {ACCENT_PRESS}; }}
+        """)
+        self._confirm_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self._confirm_btn)
+
+        layout.addLayout(btn_row)
+
+    def dont_ask_again(self) -> bool:
+        return self._dont_ask.isChecked()

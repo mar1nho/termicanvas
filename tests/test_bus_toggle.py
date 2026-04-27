@@ -56,3 +56,22 @@ def test_load_session_legacy_has_no_bus_flags(qt_app, tmp_path, monkeypatch):
     data = load_session()
     assert "bus_enabled" not in data["canvas"]
     assert "bus_toggle_warned" not in data["canvas"]
+
+
+def test_bus_off_dialog_returns_confirmed_and_dont_ask(qt_app):
+    from termicanvas.dialogs import BusOffConfirmDialog
+
+    dlg = BusOffConfirmDialog()
+    # default state
+    assert dlg.dont_ask_again() is False
+
+    dlg._dont_ask.setChecked(True)
+    assert dlg.dont_ask_again() is True
+
+
+def test_bus_off_dialog_has_cancel_and_confirm_buttons(qt_app):
+    from termicanvas.dialogs import BusOffConfirmDialog
+
+    dlg = BusOffConfirmDialog()
+    assert dlg._cancel_btn.text().lower() == "cancelar"
+    assert "desligar" in dlg._confirm_btn.text().lower()
