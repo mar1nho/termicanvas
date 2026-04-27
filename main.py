@@ -9,6 +9,7 @@ import sys
 import uuid
 
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from termicanvas import snapshots as snapshots_mod
 from termicanvas.agent import AgentWidget
 from termicanvas.agents import AGENT_KINDS, managed_manifest_path
 from termicanvas.bus import Bus
@@ -26,7 +28,9 @@ from termicanvas.canvas import CanvasView
 from termicanvas.config import DEFAULT_CWD, ensure_dirs, set_last_custom_cwd
 from termicanvas.dialogs import (
     BusOffConfirmDialog,
+    LoadSnapshotConfirmDialog,
     RoleEditorDialog,
+    SnapshotNameDialog,
     TerminalLaunchDialog,
 )
 from termicanvas.diagnostics import record_error
@@ -52,8 +56,9 @@ class MainWindow(QMainWindow):
         # Read persisted state BEFORE starting bus / loading nodes.
         data = load_session() or {}
         cs = data.get("canvas", {})
-        self._bus_enabled        = bool(cs.get("bus_enabled", True))
-        self._bus_toggle_warned  = bool(cs.get("bus_toggle_warned", False))
+        self._bus_enabled         = bool(cs.get("bus_enabled", True))
+        self._bus_toggle_warned   = bool(cs.get("bus_toggle_warned", False))
+        self._snapshot_load_warned = bool(cs.get("snapshot_load_warned", False))
 
         self.canvas  = CanvasView()
         self.bus     = Bus()
@@ -73,6 +78,11 @@ class MainWindow(QMainWindow):
         self.topbar.toggle_sidebar.connect(self.sidebar.toggle)
         self.topbar.bus_toggled.connect(self._on_bus_toggled)
         self.sidebar.terminal_clicked.connect(self.canvas.focus_and_center)
+        self.sidebar.snapshot_save_requested.connect(self._on_snapshot_save_requested)
+        self.sidebar.snapshot_load_requested.connect(self._on_snapshot_load_requested)
+        self.sidebar.snapshot_rename_requested.connect(self._on_snapshot_rename_requested)
+        self.sidebar.snapshot_overwrite_requested.connect(self._on_snapshot_overwrite_requested)
+        self.sidebar.snapshot_delete_requested.connect(self._on_snapshot_delete_requested)
 
         self.canvas.nodes_changed.connect(self._refresh_sidebar)
         self.canvas.new_terminal_requested.connect(lambda: self._add_term("powershell.exe"))
@@ -100,6 +110,13 @@ class MainWindow(QMainWindow):
 
         # Reflect the persisted bus state on the topbar.
         self.topbar.set_bus_state(self._bus_enabled)
+
+        # Refresh inicial da sidebar de snapshots.
+        self._refresh_snapshots_sidebar()
+
+        # Atalho Ctrl+S para salvar snapshot.
+        self._save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self._save_shortcut.activated.connect(self._on_snapshot_save_requested)
 
         # Defer node restore + viewport apply to next event loop tick so the
         # window is fully constructed first (matches the previous QTimer.singleShot
@@ -447,7 +464,143 @@ class MainWindow(QMainWindow):
             self.topbar._accent_color,
             bus_enabled=self._bus_enabled,
             bus_toggle_warned=self._bus_toggle_warned,
+            snapshot_load_warned=self._snapshot_load_warned,
         )
+
+    # ---------- snapshots ----------
+
+    def _refresh_snapshots_sidebar(self):
+        try:
+            items = snapshots_mod.list_snapshots()
+        except Exception as e:
+            record_error("main.snapshots.list", e)
+            items = []
+        self.sidebar.set_snapshots(items)
+
+    def _on_snapshot_save_requested(self):
+        dlg = SnapshotNameDialog(parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        name = dlg.chosen_name()
+        if not name:
+            return
+        if snapshots_mod.snapshot_exists(name):
+            ans = QMessageBox.question(
+                self, "Snapshot",
+                f"Ja existe um snapshot '{name}'. Sobrescrever?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            snapshots_mod.save_snapshot(name, self.canvas, self.topbar._accent_color)
+        except Exception as e:
+            record_error("main.snapshots.save", e)
+            QMessageBox.warning(self, "Snapshot", f"Falhou ao salvar: {e}")
+            return
+        self._refresh_snapshots_sidebar()
+
+    def _on_snapshot_load_requested(self, file_name: str):
+        info = snapshots_mod.load_snapshot(file_name)
+        if info is None:
+            QMessageBox.warning(self, "Snapshot", "Snapshot nao encontrado ou corrompido.")
+            self._refresh_snapshots_sidebar()
+            return
+
+        display_name = info.get("name", file_name)
+        if not self._snapshot_load_warned:
+            dlg = LoadSnapshotConfirmDialog(parent=self, snapshot_name=display_name)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            if dlg.dont_ask_again():
+                self._snapshot_load_warned = True
+            if dlg.chosen_action() == LoadSnapshotConfirmDialog.SAVE_AND_LOAD:
+                self._auto_save_current_snapshot()
+        self._apply_snapshot(info)
+
+    def _on_snapshot_rename_requested(self, file_name: str):
+        info = snapshots_mod.load_snapshot(file_name)
+        if info is None:
+            return
+        current = info.get("name", file_name)
+        dlg = SnapshotNameDialog(
+            parent=self, initial_name=current,
+            title="Renomear snapshot", confirm_label="Renomear",
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_name = dlg.chosen_name()
+        if not new_name or new_name == current:
+            return
+        if snapshots_mod.rename_snapshot(file_name, new_name) is None:
+            QMessageBox.warning(
+                self, "Snapshot",
+                f"Ja existe outro snapshot com nome similar a '{new_name}'.",
+            )
+            return
+        self._refresh_snapshots_sidebar()
+
+    def _on_snapshot_overwrite_requested(self, file_name: str):
+        info = snapshots_mod.load_snapshot(file_name)
+        if info is None:
+            return
+        display_name = info.get("name", file_name)
+        ans = QMessageBox.question(
+            self, "Snapshot",
+            f"Sobrescrever '{display_name}' com o canvas atual?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            snapshots_mod.save_snapshot(display_name, self.canvas, self.topbar._accent_color)
+        except Exception as e:
+            record_error("main.snapshots.overwrite", e)
+            QMessageBox.warning(self, "Snapshot", f"Falhou ao sobrescrever: {e}")
+            return
+        self._refresh_snapshots_sidebar()
+
+    def _on_snapshot_delete_requested(self, file_name: str):
+        info = snapshots_mod.load_snapshot(file_name)
+        display_name = (info or {}).get("name", file_name)
+        ans = QMessageBox.question(
+            self, "Snapshot",
+            f"Deletar snapshot '{display_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        snapshots_mod.delete_snapshot(file_name)
+        self._refresh_snapshots_sidebar()
+
+    def _auto_save_current_snapshot(self):
+        """Salva o canvas atual com nome auto-gerado antes de carregar outro snapshot."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d-%H%M")
+        try:
+            snapshots_mod.save_snapshot(
+                f"auto {ts}", self.canvas, self.topbar._accent_color,
+            )
+        except Exception as e:
+            record_error("main.snapshots.auto_save", e)
+
+    def _apply_snapshot(self, data: dict):
+        """Substitui o canvas atual pelo conteudo de um snapshot. Liga o bus se
+        precisar (snapshot tem nodes -> precisa bus para terminais funcionarem)."""
+        # 1. Limpa canvas atual
+        self.canvas.clear_all(bus=self.bus)
+        # 2. Liga bus se houver nodes pra carregar e ele estiver desligado
+        if data.get("nodes") and not self._bus_enabled:
+            self._enable_bus()
+        # 3. Aplica o conteudo do snapshot
+        self._load_session_nodes(data)
+        self._apply_session_viewport(data)
+        # 4. Persiste o estado novo
+        self._save_session_now()
+        self._refresh_snapshots_sidebar()
 
     def closeEvent(self, e):
         self._save_session_now()
