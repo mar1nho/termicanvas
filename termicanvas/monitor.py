@@ -17,6 +17,7 @@ from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
+from .icons import get_icon
 from .tokens import (
     ACCENT,
     BG_ELEVATED,
@@ -438,11 +439,15 @@ class DebugMonitorWidget(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(6)
 
-        self._copy_btn = QPushButton("📋 Copy snapshot")
+        self._copy_btn = QPushButton("Copy snapshot")
+        self._copy_btn.setIcon(get_icon("clipboard", color=TEXT_PRIMARY, size=14))
+        self._copy_btn.setIconSize(QSize(14, 14))
         self._copy_btn.clicked.connect(self._copy_snapshot)
         actions.addWidget(self._copy_btn)
 
-        self._save_btn = QPushButton("💾 Save JSON")
+        self._save_btn = QPushButton("Save JSON")
+        self._save_btn.setIcon(get_icon("save", color=TEXT_PRIMARY, size=14))
+        self._save_btn.setIconSize(QSize(14, 14))
         self._save_btn.clicked.connect(self._save_snapshot)
         actions.addWidget(self._save_btn)
 
@@ -470,18 +475,17 @@ class DebugMonitorWidget(QWidget):
         self._sparks: dict[str, Sparkline] = {}
 
         rows = [
-            ("rss",         "🧠 RAM",       "MB"),
-            ("cpu",         "🖥 CPU",       "%"),
-            ("n_nodes",     "📦 Nodes",     ""),
-            ("n_terminals", "🖥 Terminals", ""),
-            ("n_timers",    "⏱ Timers",    ""),
-            ("queue",       "📨 Queue",     ""),
+            ("rss",         "memory",   "RAM"),
+            ("cpu",         "cpu",      "CPU"),
+            ("n_nodes",     "box",      "Nodes"),
+            ("n_terminals", "monitor",  "Terminals"),
+            ("n_timers",    "clock",    "Timers"),
+            ("queue",       "inbox",    "Queue"),
         ]
-        for key, label_text, unit in rows:
+        for key, icon_name, label_text in rows:
             row = QHBoxLayout()
             row.setSpacing(8)
-            lbl = QLabel(label_text)
-            lbl.setMinimumWidth(110)
+            lbl = self._make_icon_label(icon_name, label_text)
             row.addWidget(lbl)
 
             val_lbl = QLabel("—")
@@ -526,6 +530,25 @@ class DebugMonitorWidget(QWidget):
 
         self._tabs.addTab(page, "Overview")
 
+    def _make_icon_label(self, icon_name: str, text: str, min_width: int = 110) -> QWidget:
+        """Build an icon + text widget for row labels in the Overview tab."""
+        container = QWidget()
+        container.setMinimumWidth(min_width)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(get_icon(icon_name, color=TEXT_PRIMARY, size=14).pixmap(14, 14))
+        icon_lbl.setStyleSheet("background: transparent;")
+        layout.addWidget(icon_lbl)
+
+        text_lbl = QLabel(text)
+        text_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        layout.addWidget(text_lbl)
+        layout.addStretch(1)
+        return container
+
     def _build_per_terminal_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -552,7 +575,9 @@ class DebugMonitorWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         controls = QHBoxLayout()
-        clear_btn = QPushButton("🗑 Limpar")
+        clear_btn = QPushButton("Limpar")
+        clear_btn.setIcon(get_icon("trash", color=TEXT_PRIMARY, size=14))
+        clear_btn.setIconSize(QSize(14, 14))
         clear_btn.clicked.connect(self._clear_errors)
         controls.addWidget(clear_btn)
         controls.addStretch(1)
@@ -573,7 +598,9 @@ class DebugMonitorWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         controls = QHBoxLayout()
-        refresh_btn = QPushButton("🔄 Atualizar agora")
+        refresh_btn = QPushButton("Atualizar agora")
+        refresh_btn.setIcon(get_icon("refresh-cw", color=TEXT_PRIMARY, size=14))
+        refresh_btn.setIconSize(QSize(14, 14))
         refresh_btn.clicked.connect(self._refresh_threads)
         controls.addWidget(refresh_btn)
         controls.addStretch(1)

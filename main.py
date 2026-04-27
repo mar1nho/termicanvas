@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
                 self.canvas.focus_and_center(frame)
                 return
         widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
-        self.canvas.add_node(widget, "Debug Monitor", size=(560, 600), icon="🐛")
+        self.canvas.add_node(widget, "Debug Monitor", size=(560, 600), icon="")
 
     def _route_output(self, source_frame, text):
         for src, tgt in self.canvas.connections:
