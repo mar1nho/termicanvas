@@ -7,6 +7,7 @@ DEFAULT_CWD  = r"C:\Users\usuario\Documents\Vault\dattos-ia"
 # Pastas em ~/.termicanvas (criadas em ensure_dirs())
 TERMICANVAS_HOME = Path.home() / ".termicanvas"
 ROLES_DIR        = TERMICANVAS_HOME / "roles"
+SNAPSHOTS_DIR    = TERMICANVAS_HOME / "snapshots"
 BUS_PORT_FILE    = TERMICANVAS_HOME / "bus.port"
 
 # Sessao continua na raiz do projeto (compat com session.json existente)
@@ -28,3 +29,4 @@ def ensure_dirs():
     """Cria estrutura ~/.termicanvas/ na primeira execucao. Idempotente."""
     TERMICANVAS_HOME.mkdir(parents=True, exist_ok=True)
     ROLES_DIR.mkdir(parents=True, exist_ok=True)
+    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,8 @@
-"""Persistencia da sessao (nodes, conexoes, viewport) em session.json."""
+"""Persistencia da sessao (nodes, conexoes, viewport) em session.json.
+
+A funcao serialize_canvas() e exportada para que o modulo snapshots.py
+reuse a mesma logica sem duplicar codigo.
+"""
 
 import json
 
@@ -9,10 +13,18 @@ from .tokens import ACCENT
 from .widgets import NoteWidget, PromptCard
 
 
-def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warned=False):
+def serialize_canvas(canvas):
+    """Converte o estado atual do canvas em (nodes, connections) JSON-able.
+
+    nodes: list[dict] — cada um com type/name/icon/x/y/w/h/color e fields
+    especificos do tipo (terminal -> shell/cwd/agent_kind/etc; note -> content;
+    prompt -> content; agent/debug_monitor -> sem extras).
+
+    connections: list[[src_idx, tgt_idx]] — indices em canvas.proxies.
+    """
     nodes = []
     for proxy, frame in canvas.proxies:
-        pos  = proxy.pos()
+        pos = proxy.pos()
         base = {
             "name":         frame.header.title.text(),
             "icon":         frame.icon_text() if hasattr(frame, "icon_text") else "",
@@ -35,17 +47,11 @@ def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warne
                 "auto_reply":    frame.inner.auto_reply,
             })
         elif isinstance(frame.inner, NoteWidget):
-            base.update({
-                "type":    "note",
-                "content": frame.inner.toPlainText(),
-            })
+            base.update({"type": "note", "content": frame.inner.toPlainText()})
         elif isinstance(frame.inner, AgentWidget):
             base.update({"type": "agent"})
         elif isinstance(frame.inner, PromptCard):
-            base.update({
-                "type":    "prompt",
-                "content": frame.inner.text(),
-            })
+            base.update({"type": "prompt", "content": frame.inner.text()})
         else:
             from .monitor import DebugMonitorWidget
             if isinstance(frame.inner, DebugMonitorWidget):
@@ -61,15 +67,21 @@ def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warne
             conns.append([frame_list.index(src), frame_list.index(tgt)])
         except ValueError:
             pass
+    return nodes, conns
 
+
+def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warned=False,
+                 snapshot_load_warned=False):
+    nodes, conns = serialize_canvas(canvas)
     data = {
         "canvas": {
-            "scale":              canvas.transform().m11(),
-            "scroll_h":           canvas.horizontalScrollBar().value(),
-            "scroll_v":           canvas.verticalScrollBar().value(),
-            "accent_color":       accent_color,
-            "bus_enabled":        bool(bus_enabled),
-            "bus_toggle_warned":  bool(bus_toggle_warned),
+            "scale":                 canvas.transform().m11(),
+            "scroll_h":              canvas.horizontalScrollBar().value(),
+            "scroll_v":              canvas.verticalScrollBar().value(),
+            "accent_color":          accent_color,
+            "bus_enabled":           bool(bus_enabled),
+            "bus_toggle_warned":     bool(bus_toggle_warned),
+            "snapshot_load_warned":  bool(snapshot_load_warned),
         },
         "nodes": nodes,
         "connections": conns,
