@@ -9,8 +9,67 @@ from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 
 
 class _HistoryScreen(pyte.HistoryScreen):
+    """HistoryScreen com history compactado.
+
+    Cada row que sai da tela ativa pra history vira uma string plana — sem
+    Char dicts, sem cores, sem atributos. Cores so sobrevivem no buffer
+    visivel (tela ativa). Economia: ~95%% de RAM por linha de scrollback
+    (de ~25 KB/row em Char dicts pra ~100 B/row em string).
+
+    Para Shift+wheel scrollback continuar funcionando, prev_page/next_page
+    re-inflam strings de volta para Char dicts default antes de delegar
+    pro pyte (perde cor naquele momento, mas o user nao espera cor em
+    scrollback antigo de qualquer jeito).
+    """
+
     def select_graphic_rendition(self, *attrs, private=False, **kwargs):
         super().select_graphic_rendition(*attrs)
+
+    def index(self):
+        """Sobrescreve para compactar a row recem-empurrada para history.top."""
+        bottom = self.margins.bottom if self.margins else self.lines - 1
+        will_push = (self.cursor.y == bottom)
+        super().index()
+        if will_push and self.history.top:
+            last = self.history.top[-1]
+            if not isinstance(last, str):
+                self.history.top[-1] = self._compact_row(last)
+
+    def _compact_row(self, row):
+        """Char dict (com cor/bold/etc) -> string plana."""
+        chars = []
+        for x in range(self.columns):
+            try:
+                ch = row[x].data or " "
+            except (KeyError, AttributeError):
+                ch = " "
+            chars.append(ch)
+        return "".join(chars).rstrip()
+
+    def _inflate_row(self, s):
+        """String plana -> dict de Char default (necessario para prev/next_page)."""
+        from pyte.screens import Char, StaticDefaultDict
+        row = StaticDefaultDict(Char)
+        for x, ch in enumerate(s):
+            if x >= self.columns:
+                break
+            row[x] = Char(data=ch)
+        return row
+
+    def _inflate_deque(self, deq):
+        for i in range(len(deq)):
+            r = deq[i]
+            if isinstance(r, str):
+                deq[i] = self._inflate_row(r)
+
+    def prev_page(self):
+        # pyte pode mover varias rows de history.top -> buffer; inflar antes.
+        self._inflate_deque(self.history.top)
+        super().prev_page()
+
+    def next_page(self):
+        self._inflate_deque(self.history.bottom)
+        super().next_page()
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QApplication, QTextEdit
 
@@ -369,7 +428,18 @@ class TerminalWidget(QTextEdit):
         return "".join(row[x].data for x in range(width)).rstrip()
 
     def _row_to_runs(self, row, width):
-        """Converte uma row do pyte em [(text, fg_hex), ...] agrupando por cor."""
+        """Converte uma row do pyte em [(text, fg_hex), ...] agrupando por cor.
+
+        Aceita dois formatos:
+        - dict-like (buffer ativo): cells com .data, .fg, .bold, etc.
+        - string (history compactada): texto plano, render como default fg.
+        """
+        if isinstance(row, str):
+            text = row[:width].rstrip()
+            if not text:
+                return []
+            return [(text, ANSI_COLORS["default"])]
+
         runs = []
         current_text = []
         current_fg = None
