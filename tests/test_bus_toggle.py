@@ -90,3 +90,68 @@ def test_bus_off_dialog_buttons_resolve_correctly(qt_app):
     confirm_dlg = BusOffConfirmDialog()
     confirm_dlg._confirm_btn.click()
     assert confirm_dlg.result() == QDialog.DialogCode.Accepted
+
+
+def test_canvas_clear_all_removes_proxies_and_connections(qt_app):
+    from unittest.mock import MagicMock
+    from termicanvas.canvas import CanvasView
+    from termicanvas.terminal import TerminalWidget
+
+    canvas = CanvasView()
+
+    # Two terminal-like nodes + one connection between them.
+    fake_terminal_a = MagicMock(spec=TerminalWidget)
+    fake_terminal_a.node_id = "aaa"
+    fake_terminal_b = MagicMock(spec=TerminalWidget)
+    fake_terminal_b.node_id = "bbb"
+
+    proxy_a, frame_a = MagicMock(), MagicMock()
+    frame_a.inner = fake_terminal_a
+    proxy_b, frame_b = MagicMock(), MagicMock()
+    frame_b.inner = fake_terminal_b
+
+    canvas.proxies = [(proxy_a, frame_a), (proxy_b, frame_b)]
+    canvas.connections = [(frame_a, frame_b)]
+    canvas.focused_frame = frame_a
+
+    fake_bus = MagicMock()
+
+    canvas.clear_all(bus=fake_bus)
+
+    assert canvas.proxies == []
+    assert canvas.connections == []
+    assert canvas.focused_frame is None
+    fake_terminal_a.shutdown.assert_called_once()
+    fake_terminal_b.shutdown.assert_called_once()
+    fake_bus.unregister.assert_any_call("aaa")
+    fake_bus.unregister.assert_any_call("bbb")
+
+
+def test_canvas_clear_all_emits_nodes_changed(qt_app):
+    from termicanvas.canvas import CanvasView
+
+    canvas = CanvasView()
+    fired = []
+    canvas.nodes_changed.connect(lambda: fired.append(True))
+
+    canvas.clear_all()
+
+    assert fired == [True]
+
+
+def test_canvas_clear_all_swallows_shutdown_errors(qt_app):
+    from unittest.mock import MagicMock
+    from termicanvas.canvas import CanvasView
+    from termicanvas.terminal import TerminalWidget
+
+    canvas = CanvasView()
+    bad = MagicMock(spec=TerminalWidget)
+    bad.node_id = "x"
+    bad.shutdown.side_effect = RuntimeError("boom")
+    proxy, frame = MagicMock(), MagicMock()
+    frame.inner = bad
+    canvas.proxies = [(proxy, frame)]
+
+    # must not raise
+    canvas.clear_all(bus=MagicMock())
+    assert canvas.proxies == []

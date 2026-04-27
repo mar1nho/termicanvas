@@ -325,6 +325,46 @@ class CanvasView(QGraphicsView):
         self.connections = [(s, t) for s, t in self.connections if s is not frame and t is not frame]
         self.nodes_changed.emit()
 
+    def clear_all(self, bus=None):
+        """Fecha todos os nodes do canvas.
+
+        Itera uma copia da lista de proxies (a real eh mutada conforme
+        cada node sai). Falhas individuais sao silenciadas em diagnostics
+        para que um shutdown ruim nao bloqueie os demais.
+        """
+        from .monitor import DebugMonitorWidget
+        from .diagnostics import record_error
+
+        for proxy, frame in list(self.proxies):
+            inner = frame.inner
+            if isinstance(inner, TerminalWidget):
+                node_id = getattr(inner, "node_id", None)
+                if node_id and bus is not None:
+                    try:
+                        bus.unregister(node_id)
+                    except Exception as e:
+                        record_error("canvas.clear_all.unregister", e)
+                try:
+                    inner.shutdown()
+                except Exception as e:
+                    record_error("canvas.clear_all.shutdown", e)
+            elif isinstance(inner, DebugMonitorWidget):
+                try:
+                    inner.shutdown()
+                except Exception as e:
+                    record_error("canvas.clear_all.monitor_shutdown", e)
+            try:
+                self._scene.removeItem(proxy)
+            except Exception as e:
+                record_error("canvas.clear_all.scene_remove", e)
+
+        self.proxies.clear()
+        self.connections.clear()
+        self.focused_frame = None
+        self._virtual_pos.clear()
+        self._virtual_size.clear()
+        self.nodes_changed.emit()
+
     def focus_and_center(self, frame):
         for proxy, f in self.proxies:
             if f is frame:
