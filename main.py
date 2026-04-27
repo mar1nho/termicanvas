@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -23,7 +24,11 @@ from termicanvas.agents import AGENT_KINDS, managed_manifest_path
 from termicanvas.bus import Bus
 from termicanvas.canvas import CanvasView
 from termicanvas.config import DEFAULT_CWD, ensure_dirs, set_last_custom_cwd
-from termicanvas.dialogs import RoleEditorDialog, TerminalLaunchDialog
+from termicanvas.dialogs import (
+    BusOffConfirmDialog,
+    RoleEditorDialog,
+    TerminalLaunchDialog,
+)
 from termicanvas.roles import seed_roles
 from termicanvas.session import load_session, save_session
 from termicanvas.sidebar import TerminalsSidebar
@@ -58,6 +63,7 @@ class MainWindow(QMainWindow):
         self.topbar.add_debug.connect(self._add_debug_monitor)
         self.topbar.accent_changed.connect(self._on_accent_changed)
         self.topbar.toggle_sidebar.connect(self.sidebar.toggle)
+        self.topbar.bus_toggled.connect(self._on_bus_toggled)
         self.sidebar.terminal_clicked.connect(self.canvas.focus_and_center)
 
         self.canvas.nodes_changed.connect(self._refresh_sidebar)
@@ -369,6 +375,61 @@ class MainWindow(QMainWindow):
                 elif isinstance(tgt.inner, TerminalWidget):
                     tgt.inner.send(text)
                 break
+
+    # ---------- bus toggle ----------
+
+    def _on_bus_toggled(self, enabled: bool):
+        if enabled:
+            self._enable_bus()
+        else:
+            if not self._bus_toggle_warned:
+                ok, dont_ask = self._show_bus_off_confirmation()
+                if not ok:
+                    # user cancelled — keep button green
+                    self.topbar.set_bus_state(True)
+                    return
+                if dont_ask:
+                    self._bus_toggle_warned = True
+            self._disable_bus()
+        self._save_session_now()
+
+    def _enable_bus(self):
+        from termicanvas.diagnostics import record_error
+        try:
+            self.bus.start(self.canvas)
+            self._bus_enabled = True
+            self.topbar.set_bus_state(True)
+        except Exception as e:
+            record_error("main.bus_toggle.start", e)
+            self._bus_enabled = False
+            self.topbar.set_bus_state(False)
+            QMessageBox.warning(
+                self, "Bus",
+                "Falhou ao iniciar o bus. Veja o Debug Monitor.",
+            )
+
+    def _disable_bus(self):
+        from termicanvas.diagnostics import record_error
+        self.canvas.clear_all(bus=self.bus)
+        try:
+            self.bus.stop()
+        except Exception as e:
+            record_error("main.bus_toggle.stop", e)
+        self._bus_enabled = False
+        self.topbar.set_bus_state(False)
+
+    def _show_bus_off_confirmation(self):
+        dlg = BusOffConfirmDialog(parent=self)
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        return accepted, dlg.dont_ask_again()
+
+    def _save_session_now(self):
+        save_session(
+            self.canvas,
+            self.topbar._accent_color,
+            bus_enabled=self._bus_enabled,
+            bus_toggle_warned=self._bus_toggle_warned,
+        )
 
     def closeEvent(self, e):
         save_session(self.canvas, self.topbar._accent_color)
