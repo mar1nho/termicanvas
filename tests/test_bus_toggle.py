@@ -181,13 +181,13 @@ def test_bus_toggle_button_set_state_updates_tooltip_and_animation(qt_app):
 
 
 def test_bus_toggle_button_emits_clicked_signal(qt_app):
+    """Default state is ON; pressing emits clicked(False) — the new requested state."""
     from termicanvas.topbar import BusToggleButton
 
     btn = BusToggleButton()
     fired = []
-    btn.clicked.connect(lambda: fired.append(True))
+    btn.clicked.connect(lambda new_state: fired.append(new_state))
 
-    # simulate click
     from PyQt6.QtCore import QEvent, QPointF, Qt
     from PyQt6.QtGui import QMouseEvent
     ev = QMouseEvent(
@@ -195,10 +195,13 @@ def test_bus_toggle_button_emits_clicked_signal(qt_app):
         Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
     )
     btn.mousePressEvent(ev)
-    assert fired == [True]
+    # default _state is True, so the click requests the inverse: False.
+    assert fired == [False]
 
 
 def test_topbar_emits_bus_toggled_with_inverse_of_current_state(qt_app):
+    """The clicked signal now carries the requested state directly; TopBar
+    forwards it as bus_toggled(bool)."""
     from termicanvas.topbar import TopBar
 
     bar = TopBar()
@@ -206,10 +209,10 @@ def test_topbar_emits_bus_toggled_with_inverse_of_current_state(qt_app):
     bar.bus_toggled.connect(lambda enabled: received.append(enabled))
 
     # default state is True; click should request False
-    bar._bus_button.clicked.emit()
+    bar._bus_button.clicked.emit(False)
     assert received == [False]
 
     # now flip to off, then click should request True
     bar.set_bus_state(False)
-    bar._bus_button.clicked.emit()
+    bar._bus_button.clicked.emit(True)
     assert received == [False, True]

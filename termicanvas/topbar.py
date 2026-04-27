@@ -36,7 +36,7 @@ from .tokens import (
 class BusToggleButton(QWidget):
     """Bolinha verde (ON) / vermelha pulsante (OFF) para o toggle do bus."""
 
-    clicked = pyqtSignal()
+    clicked = pyqtSignal(bool)  # carries the new requested state (inverse of current)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,7 +86,7 @@ class BusToggleButton(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            self.clicked.emit(not self._state)
         super().mousePressEvent(event)
 
     def paintEvent(self, _event):
@@ -146,9 +146,7 @@ class TopBar(QWidget):
         layout.setSpacing(0)
 
         self._bus_button = BusToggleButton()
-        self._bus_button.clicked.connect(
-            lambda: self.bus_toggled.emit(not self._bus_button._state)
-        )
+        self._bus_button.clicked.connect(self.bus_toggled.emit)
         layout.addWidget(self._bus_button)
         layout.addSpacing(8)
 
