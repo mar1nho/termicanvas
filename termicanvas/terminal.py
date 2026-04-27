@@ -216,9 +216,9 @@ class TerminalWidget(QTextEdit):
         self._render_dirty = False
         self._last_content = ""
         self._render_timer = QTimer(self)
-        # 80ms = ~12fps. Suave o suficiente pra terminal e bem mais leve que 33ms
-        # (rebuild colorido do documento e caro com TUI animado).
-        self._render_timer.setInterval(80)
+        # 100ms = 10fps. Suave o suficiente pra terminal e -20% rebuilds vs 80ms
+        # (rebuild colorido do documento e caro com TUI animado tipo claude code).
+        self._render_timer.setInterval(100)
         self._render_timer.timeout.connect(self._flush_render)
         self._render_timer.start()
 
