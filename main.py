@@ -29,6 +29,7 @@ from termicanvas.dialogs import (
     RoleEditorDialog,
     TerminalLaunchDialog,
 )
+from termicanvas.diagnostics import record_error
 from termicanvas.roles import seed_roles
 from termicanvas.session import load_session, save_session
 from termicanvas.sidebar import TerminalsSidebar
@@ -48,9 +49,16 @@ class MainWindow(QMainWindow):
         ensure_dirs()
         seed_roles()
 
+        # Read persisted state BEFORE starting bus / loading nodes.
+        data = load_session() or {}
+        cs = data.get("canvas", {})
+        self._bus_enabled        = bool(cs.get("bus_enabled", True))
+        self._bus_toggle_warned  = bool(cs.get("bus_toggle_warned", False))
+
         self.canvas  = CanvasView()
         self.bus     = Bus()
-        self.bus.start(self.canvas)
+        if self._bus_enabled:
+            self.bus.start(self.canvas)
         self.canvas._bus_ref = self.bus
         self.sidebar = TerminalsSidebar()
 
@@ -90,7 +98,19 @@ class MainWindow(QMainWindow):
         self.last_terminal     = None
         self._terminal_counter = 0
 
-        QTimer.singleShot(0, self._load_session)
+        # Reflect the persisted bus state on the topbar.
+        self.topbar.set_bus_state(self._bus_enabled)
+
+        # Defer node restore + viewport apply to next event loop tick so the
+        # window is fully constructed first (matches the previous QTimer.singleShot
+        # behavior).
+        if self._bus_enabled:
+            QTimer.singleShot(0, lambda d=data: (
+                self._load_session_nodes(d),
+                self._apply_session_viewport(d),
+            ))
+        else:
+            QTimer.singleShot(0, lambda d=data: self._apply_session_viewport(d))
 
     # ---------- session restore ----------
 
@@ -394,7 +414,6 @@ class MainWindow(QMainWindow):
         self._save_session_now()
 
     def _enable_bus(self):
-        from termicanvas.diagnostics import record_error
         try:
             self.bus.start(self.canvas)
             self._bus_enabled = True
@@ -409,7 +428,6 @@ class MainWindow(QMainWindow):
             )
 
     def _disable_bus(self):
-        from termicanvas.diagnostics import record_error
         self.canvas.clear_all(bus=self.bus)
         try:
             self.bus.stop()
@@ -432,14 +450,15 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, e):
-        save_session(self.canvas, self.topbar._accent_color)
-        for proxy, frame in self.canvas.proxies:
-            if isinstance(frame.inner, TerminalWidget):
-                frame.inner.shutdown()
-        try:
-            self.bus.stop()
-        except Exception:
-            pass
+        self._save_session_now()
+        if self._bus_enabled:
+            for proxy, frame in self.canvas.proxies:
+                if isinstance(frame.inner, TerminalWidget):
+                    frame.inner.shutdown()
+            try:
+                self.bus.stop()
+            except Exception:
+                pass
         super().closeEvent(e)
 
 
