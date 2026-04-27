@@ -356,6 +356,8 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    from termicanvas.diagnostics import install_excepthooks
+    install_excepthooks()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     mw = MainWindow()

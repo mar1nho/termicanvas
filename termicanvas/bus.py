@@ -64,13 +64,15 @@ class Bus(QObject):
         if self._server:
             try:
                 self._server.shutdown()
-            except Exception:
-                pass
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("bus.stop.server_shutdown", e)
         self._nodes.clear()
         try:
             BUS_PORT_FILE.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            from .diagnostics import record_error
+            record_error("bus.stop.unlink", e)
 
     def register(self, terminal, frame, name, agent_kind=None):
         node_id = uuid.uuid4().hex[:12]
@@ -164,8 +166,9 @@ class Bus(QObject):
         ensure_dirs()
         try:
             BUS_PORT_FILE.write_text(str(self._port), encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as e:
+            from .diagnostics import record_error
+            record_error("bus._spin_server.port_file", e)
 
     def _process_queue(self):
         if not self._queue:

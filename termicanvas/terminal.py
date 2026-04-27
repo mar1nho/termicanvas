@@ -262,6 +262,8 @@ class TerminalWidget(QTextEdit):
             self.alive = True
             threading.Thread(target=self._read_loop, daemon=True).start()
         except Exception as e:
+            from .diagnostics import record_error
+            record_error("terminal._spawn", e)
             self.setPlainText(f"[erro] falha ao iniciar {self.shell}: {e}")
 
     def _read_loop(self):
@@ -276,6 +278,8 @@ class TerminalWidget(QTextEdit):
             except EOFError:
                 break
             except Exception as e:
+                from .diagnostics import record_error
+                record_error("terminal._read_loop", e)
                 self.bridge.data_received.emit(f"\n[erro] {e}\n")
                 break
         self.alive = False
@@ -337,8 +341,9 @@ class TerminalWidget(QTextEdit):
             response = _clean_tui_response(new_text)
             if response and self._bus_ref:
                 self._bus_ref.enqueue(self.node_id, self._pending_reply_to, response)
-        except Exception:
-            pass
+        except Exception as e:
+            from .diagnostics import record_error
+            record_error("terminal._dispatch_reply", e)
         finally:
             self._pending_reply_to = None
             self._reply_baseline   = ""
@@ -352,7 +357,13 @@ class TerminalWidget(QTextEdit):
     def _flush_render(self):
         if self._render_dirty:
             self._render_dirty = False
+            from time import perf_counter
+            from .diagnostics import record_render_time
+            _t0 = perf_counter()
             self._render()
+            _elapsed_ms = (perf_counter() - _t0) * 1000
+            if _elapsed_ms > 0.1:
+                record_render_time(_elapsed_ms)
 
     def _row_to_str(self, row, width):
         return "".join(row[x].data for x in range(width)).rstrip()
@@ -576,8 +587,9 @@ class TerminalWidget(QTextEdit):
                 self.activity = cmd[:50] + ("..." if len(cmd) > 50 else "")
                 self.activity_changed.emit(self.activity)
                 self.pty.write(cmd + "\r")
-            except Exception:
-                pass
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("terminal.send", e)
 
     def inject_message(self, message, from_node_id=None, from_name=None):
         """Injeta mensagem no PTY como se digitada, separando texto e Enter.
@@ -606,7 +618,9 @@ class TerminalWidget(QTextEdit):
             self.activity = (text[:50] + "...") if len(text) > 50 else text
             self.activity_changed.emit(self.activity)
             self.pty.write(text)
-        except Exception:
+        except Exception as e:
+            from .diagnostics import record_error
+            record_error("terminal.inject_message", e)
             return
 
         # Enter separado apos delay — deixa o TUI processar a linha completa
@@ -616,8 +630,9 @@ class TerminalWidget(QTextEdit):
         if self.pty and self.alive:
             try:
                 self.pty.write("\r")
-            except Exception:
-                pass
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("terminal._inject_enter", e)
 
     def font_up(self):
         self._font_size = min(self._font_size + 1, 24)
