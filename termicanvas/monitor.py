@@ -180,3 +180,210 @@ class Histogram(QWidget):
             p.setFont(font)
             p.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
         p.end()
+
+
+# ---------- collector ----------
+
+import os
+import time
+import weakref
+
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QApplication
+
+try:
+    import psutil
+    _proc = psutil.Process(os.getpid())
+except ImportError:
+    _proc = None
+
+from . import diagnostics
+from .terminal import TerminalWidget
+
+
+def _percentile(sorted_values, pct):
+    """Linear-interpolation percentile. sorted_values must be pre-sorted."""
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    k = (len(sorted_values) - 1) * (pct / 100.0)
+    f = int(k)
+    c = min(f + 1, len(sorted_values) - 1)
+    if f == c:
+        return float(sorted_values[f])
+    return float(sorted_values[f] + (sorted_values[c] - sorted_values[f]) * (k - f))
+
+
+class MetricsCollector(QObject):
+    """Polls metrics at 1Hz and emits MetricsSnapshot.
+
+    Holds weakref to canvas + bus to avoid keeping them alive. Observed
+    terminals live in a WeakSet, so closed terminals fall out automatically.
+    Sustained-alert state (chars/sec > 5000 for 3 ticks) is tracked here, not
+    in the UI.
+
+    Lifecycle: caller must invoke stop() before discarding the collector
+    (typically from DebugMonitorWidget.shutdown).
+    """
+
+    snapshot_ready = pyqtSignal(object)  # emits MetricsSnapshot
+
+    HISTORY_LEN = 300  # 5 min at 1Hz
+    SUSTAINED_ALERT_THRESHOLD = 5000  # chars/sec
+
+    def __init__(self, canvas, bus, parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self._canvas_ref = weakref.ref(canvas)
+        self._bus_ref = weakref.ref(bus)
+        self._observed_terminals: "weakref.WeakSet[TerminalWidget]" = weakref.WeakSet()
+        self._refresh_observed_terminals()
+
+        # Sparkline histories
+        self.rss_history: deque = deque(maxlen=self.HISTORY_LEN)
+        self.cpu_history: deque = deque(maxlen=self.HISTORY_LEN)
+        self.n_terminals_history: deque = deque(maxlen=self.HISTORY_LEN)
+        self.queue_history: deque = deque(maxlen=self.HISTORY_LEN)
+        self.render_p95_history: deque = deque(maxlen=self.HISTORY_LEN)
+
+        # Per-terminal state for chars/sec delta
+        self._last_raw_buf_len: dict[str, int] = {}
+        self._sustained_alert_count: dict[str, int] = {}
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+    def _refresh_observed_terminals(self):
+        """Rescans canvas.proxies for live TerminalWidgets and re-populates the WeakSet."""
+        canvas = self._canvas_ref()
+        if canvas is None:
+            return
+        new_set: "weakref.WeakSet[TerminalWidget]" = weakref.WeakSet()
+        for _, frame in getattr(canvas, "proxies", []):
+            inner = getattr(frame, "inner", None)
+            if isinstance(inner, TerminalWidget):
+                new_set.add(inner)
+        self._observed_terminals = new_set
+
+    def stop(self):
+        """Cleanup path. Stop the timer, drop refs, schedule deletion."""
+        self._timer.stop()
+        self._observed_terminals = weakref.WeakSet()
+        self.deleteLater()
+
+    def _tick(self):
+        """Build a MetricsSnapshot and emit it. Called every 1000ms."""
+        try:
+            snapshot = self._build_snapshot()
+        except Exception as e:
+            diagnostics.record_error("monitor.MetricsCollector._tick", e)
+            return
+
+        # Update histories
+        self.rss_history.append(snapshot.rss_mb)
+        self.cpu_history.append(snapshot.cpu_pct)
+        self.n_terminals_history.append(snapshot.n_terminals)
+        self.queue_history.append(snapshot.queue_size)
+        self.render_p95_history.append(snapshot.render_p95_ms)
+
+        self.snapshot_ready.emit(snapshot)
+
+    def _build_snapshot(self):
+        canvas = self._canvas_ref()
+        bus = self._bus_ref()
+
+        rss_mb = (_proc.memory_info().rss / 1024 / 1024) if _proc else -1.0
+        cpu_pct = _proc.cpu_percent(interval=None) if _proc else -1.0
+
+        n_nodes = len(getattr(canvas, "proxies", [])) if canvas else 0
+
+        # Refresh observed terminals lazily — in case the canvas opened/closed since last tick
+        self._refresh_observed_terminals()
+        live_terminals = [t for t in self._observed_terminals if self._safe_alive(t)]
+        n_terminals = len(live_terminals)
+
+        # Count timers reachable from the app + bus
+        n_timers = 0
+        app = QApplication.instance()
+        if app is not None:
+            seen = set()
+            for w in app.allWidgets():
+                for t in w.findChildren(QTimer):
+                    seen.add(id(t))
+            if bus is not None:
+                for t in bus.findChildren(QTimer):
+                    seen.add(id(t))
+            n_timers = len(seen)
+
+        queue_size = len(getattr(bus, "_queue", [])) if bus else 0
+
+        # Render time percentiles from diagnostics buffer
+        samples = sorted(diagnostics.iter_render_times())
+        p50 = _percentile(samples, 50.0)
+        p95 = _percentile(samples, 95.0)
+        p99 = _percentile(samples, 99.0)
+
+        # Per-terminal metrics
+        terminals: list[TerminalMetric] = []
+        for t in live_terminals:
+            term_metric = self._terminal_metric(t)
+            if term_metric is not None:
+                terminals.append(term_metric)
+
+        return MetricsSnapshot(
+            timestamp=time.time(),
+            rss_mb=rss_mb,
+            cpu_pct=cpu_pct,
+            n_terminals=n_terminals,
+            n_nodes=n_nodes,
+            n_timers=n_timers,
+            queue_size=queue_size,
+            render_p50_ms=p50,
+            render_p95_ms=p95,
+            render_p99_ms=p99,
+            terminals=tuple(terminals),
+        )
+
+    def _safe_alive(self, terminal):
+        """True if Python+C++ side both alive. Catches RuntimeError from a
+        deleted Qt object whose Python wrapper hasn't been GC'd yet."""
+        try:
+            return bool(getattr(terminal, "alive", False))
+        except RuntimeError:
+            return False
+
+    def _terminal_metric(self, t):
+        try:
+            node_id = getattr(t, "node_id", None) or f"id{id(t):x}"
+            name = getattr(t, "objectName", lambda: "")() or "Terminal"
+            raw_buf = getattr(t, "_raw_buf", "") or ""
+            raw_buf_kb = len(raw_buf) // 1024
+            activity = getattr(t, "activity", "") or ""
+            alive = bool(getattr(t, "alive", False))
+        except RuntimeError:
+            return None
+
+        # chars/sec — delta from last known length
+        prev = self._last_raw_buf_len.get(node_id, len(raw_buf))
+        chars_per_sec = max(0, len(raw_buf) - prev)
+        self._last_raw_buf_len[node_id] = len(raw_buf)
+
+        # Sustained alert tracking
+        if chars_per_sec > self.SUSTAINED_ALERT_THRESHOLD:
+            self._sustained_alert_count[node_id] = self._sustained_alert_count.get(node_id, 0) + 1
+        else:
+            self._sustained_alert_count[node_id] = 0
+
+        return TerminalMetric(
+            node_id=node_id,
+            name=name,
+            raw_buf_kb=raw_buf_kb,
+            chars_per_sec=chars_per_sec,
+            activity=activity[:30],
+            alive=alive,
+        )
+
+    def is_sustained_alert(self, node_id: str) -> bool:
+        return self._sustained_alert_count.get(node_id, 0) >= 3
