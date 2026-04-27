@@ -237,6 +237,8 @@ def test_bus_lifecycle_creates_and_clears_port_file(qt_app, tmp_path, monkeypatc
         bus.stop()
 
     # Bus.stop must clear the port file (disk contract relied on by the CLI).
+    assert bus._server is None
+    assert bus.port() is None
     assert not fake_port_file.exists()
 
 

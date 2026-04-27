@@ -67,6 +67,9 @@ class Bus(QObject):
             except Exception as e:
                 from .diagnostics import record_error
                 record_error("bus.stop.server_shutdown", e)
+            self._server = None
+            self._thread = None
+            self._port   = None
         self._nodes.clear()
         try:
             BUS_PORT_FILE.unlink(missing_ok=True)
