@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         # Read persisted state BEFORE starting bus / loading nodes.
         data = load_session() or {}
         cs = data.get("canvas", {})
-        self._bus_enabled         = bool(cs.get("bus_enabled", True))
+        self._bus_enabled         = bool(cs.get("bus_enabled", False))
         self._bus_toggle_warned   = bool(cs.get("bus_toggle_warned", False))
         self._snapshot_load_warned = bool(cs.get("snapshot_load_warned", False))
 

@@ -70,7 +70,7 @@ def serialize_canvas(canvas):
     return nodes, conns
 
 
-def save_session(canvas, accent_color=ACCENT, bus_enabled=True, bus_toggle_warned=False,
+def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warned=False,
                  snapshot_load_warned=False):
     nodes, conns = serialize_canvas(canvas)
     data = {
