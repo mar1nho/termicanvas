@@ -70,6 +70,12 @@ class CanvasView(QGraphicsView):
         self._conn_source = None
         self._conn_mouse  = QPointF(0, 0)
 
+        # Per-drag virtual position/size state — keeps the unsnapped target
+        # so the cursor can accumulate sub-grid motion without the node
+        # getting stuck inside a single cell.
+        self._virtual_pos: dict = {}    # proxy -> QPointF
+        self._virtual_size: dict = {}   # frame -> (float w, float h)
+
         QApplication.instance().installEventFilter(self)
 
         # overlay de navegação — posicionado em resizeEvent
@@ -219,10 +225,12 @@ class CanvasView(QGraphicsView):
         proxy.setPos(center.x() - size[0] / 2 + offset, center.y() - size[1] / 2 + offset)
 
         frame.header.drag_moved.connect(lambda d, p=proxy: self._drag(p, d))
+        frame.header.drag_finished.connect(lambda p=proxy: self._drag_end(p))
         frame.header.focus_requested.connect(lambda f=frame: self._focus(f))
         frame.header.close_clicked.connect(lambda f=frame: self._close(f))
         frame.header.title_changed.connect(lambda t, f=frame: self.nodes_changed.emit())
         frame.grip.resize_moved.connect(lambda d, f=frame, p=proxy: self._resize_frame(f, p, d))
+        frame.grip.resize_finished.connect(lambda f=frame: self._resize_end(f))
         if hasattr(inner_widget, "_schedule_resize"):
             frame.resized.connect(lambda _sz, w=inner_widget: w._schedule_resize())
 
@@ -249,21 +257,39 @@ class CanvasView(QGraphicsView):
 
     def _drag(self, proxy, delta):
         scale = self.transform().m11()
-        new_x = proxy.pos().x() + delta.x() / scale
-        new_y = proxy.pos().y() + delta.y() / scale
-        if not self._alt_held():
-            new_x = round(new_x / self.GRID_STEP) * self.GRID_STEP
-            new_y = round(new_y / self.GRID_STEP) * self.GRID_STEP
-        proxy.setPos(new_x, new_y)
+        if proxy not in self._virtual_pos:
+            self._virtual_pos[proxy] = QPointF(proxy.pos())
+        self._virtual_pos[proxy] += QPointF(delta.x() / scale, delta.y() / scale)
+        virt = self._virtual_pos[proxy]
+
+        if self._alt_held():
+            proxy.setPos(virt)
+        else:
+            sx = round(virt.x() / self.GRID_STEP) * self.GRID_STEP
+            sy = round(virt.y() / self.GRID_STEP) * self.GRID_STEP
+            proxy.setPos(sx, sy)
+
+    def _drag_end(self, proxy):
+        self._virtual_pos.pop(proxy, None)
 
     def _resize_frame(self, frame, proxy, delta):
         scale = self.transform().m11()
-        new_w = max(260, int(frame.width()  + delta.x() / scale))
-        new_h = max(180, int(frame.height() + delta.y() / scale))
+        if frame not in self._virtual_size:
+            self._virtual_size[frame] = (float(frame.width()), float(frame.height()))
+        vw, vh = self._virtual_size[frame]
+        vw += delta.x() / scale
+        vh += delta.y() / scale
+        self._virtual_size[frame] = (vw, vh)
+
+        new_w = max(260, int(vw))
+        new_h = max(180, int(vh))
         if not self._alt_held():
             new_w = max(260, round(new_w / self.GRID_STEP) * self.GRID_STEP)
             new_h = max(180, round(new_h / self.GRID_STEP) * self.GRID_STEP)
         frame.resize(new_w, new_h)
+
+    def _resize_end(self, frame):
+        self._virtual_size.pop(frame, None)
 
     def _alt_held(self):
         return bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)

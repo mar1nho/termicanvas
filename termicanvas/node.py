@@ -32,6 +32,7 @@ from .widgets import EditableLabel
 
 class NodeHeader(QWidget):
     drag_moved      = pyqtSignal(QPointF)
+    drag_finished   = pyqtSignal()
     close_clicked   = pyqtSignal()
     focus_requested = pyqtSignal()
     title_changed   = pyqtSignal(str)
@@ -291,6 +292,7 @@ class NodeHeader(QWidget):
             self._last_global = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             QApplication.instance().removeEventFilter(self)
+            self.drag_finished.emit()
 
     def mouseReleaseEvent(self, event):
         self._end_drag()
@@ -298,7 +300,8 @@ class NodeHeader(QWidget):
 
 
 class ResizeGrip(QWidget):
-    resize_moved = pyqtSignal(QPointF)
+    resize_moved    = pyqtSignal(QPointF)
+    resize_finished = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -327,7 +330,9 @@ class ResizeGrip(QWidget):
             self.resize_moved.emit(delta)
 
     def mouseReleaseEvent(self, event):
-        self._last_pos = None
+        if self._last_pos is not None:
+            self._last_pos = None
+            self.resize_finished.emit()
 
 
 class NodeFrame(QFrame):
