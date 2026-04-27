@@ -679,11 +679,12 @@ class TerminalWidget(QTextEdit):
 
     def shutdown(self):
         self.alive = False
+        self._render_timer.stop()
+        self._idle_timer.stop()
+        self._resize_timer.stop()
         if self.pty:
             try:
                 self.pty.terminate(force=True)
             except Exception:
                 pass
-        # Nao mexemos no CLAUDE.md/GEMINI.md raiz — role e injetado via mensagem
-        # inicial em vez de manifesto. O arquivo .termicanvas/role-<id>.md fica
-        # preservado pra reuso entre sessoes (e pra editor inline com botao 📝).
+        self.deleteLater()
