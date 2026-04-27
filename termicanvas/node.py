@@ -363,7 +363,13 @@ class NodeFrame(QFrame):
         self._apply_style()
 
     def _apply_style(self):
-        border = safe_border_color(self._node_color) if self._focused else BORDER
+        # If the user picked a custom color, always honor it (full when focused,
+        # thinner border when not). Otherwise the default rule applies: tint
+        # only when focused, neutral gray otherwise.
+        if self._custom_color:
+            border = safe_border_color(self._node_color)
+        else:
+            border = safe_border_color(self._node_color) if self._focused else BORDER
         width  = 2 if self._focused else 1
         self.setStyleSheet(f"""
             #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 6px; }}
