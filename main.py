@@ -137,22 +137,26 @@ class MainWindow(QMainWindow):
                 n = NoteWidget()
                 n.setPlainText(content)
                 frame = self.canvas.add_node(n, name, size=(w, h), icon=icon)
+                frame.set_node_color(color, custom=custom)
 
             elif ntype == "agent":
                 a = AgentWidget()
                 frame = self.canvas.add_node(a, name, size=(w, h), icon=icon)
                 a.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+                frame.set_node_color(color, custom=custom)
 
             elif ntype == "prompt":
                 p = PromptCard()
                 p.setText(node.get("content", ""))
                 frame = self.canvas.add_node(p, name, size=(w, h), icon=icon)
                 p.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+                frame.set_node_color(color, custom=custom)
 
             elif ntype == "debug_monitor":
                 from termicanvas.monitor import DebugMonitorWidget
                 widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
                 frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
+                frame.set_node_color(color, custom=custom)
 
             else:
                 continue
