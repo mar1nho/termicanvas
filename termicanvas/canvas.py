@@ -268,6 +268,9 @@ class CanvasView(QGraphicsView):
         for i, (proxy, f) in enumerate(self.proxies):
             if f is frame:
                 if isinstance(frame.inner, TerminalWidget):
+                    node_id = frame.inner.node_id
+                    if node_id and getattr(self, "_bus_ref", None):
+                        self._bus_ref.unregister(node_id)
                     frame.inner.shutdown()
                 self._scene.removeItem(proxy)
                 del self.proxies[i]

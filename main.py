@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
         self.canvas  = CanvasView()
         self.bus     = Bus()
         self.bus.start(self.canvas)
+        self.canvas._bus_ref = self.bus
         self.sidebar = TerminalsSidebar()
 
         self.topbar = TopBar()
