@@ -37,8 +37,9 @@ from .widgets import PromptCard
 
 
 class CanvasView(QGraphicsView):
-    nodes_changed          = pyqtSignal()
-    new_terminal_requested = pyqtSignal()
+    nodes_changed             = pyqtSignal()
+    new_terminal_requested    = pyqtSignal()
+    debug_monitor_requested   = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -264,13 +265,19 @@ class CanvasView(QGraphicsView):
         self.nodes_changed.emit()
 
     def _close(self, frame):
+        # Late import to avoid pulling monitor (and psutil) at module load
+        from .monitor import DebugMonitorWidget
+
         for i, (proxy, f) in enumerate(self.proxies):
             if f is frame:
-                if isinstance(frame.inner, TerminalWidget):
-                    node_id = frame.inner.node_id
+                inner = frame.inner
+                if isinstance(inner, TerminalWidget):
+                    node_id = inner.node_id
                     if node_id and getattr(self, "_bus_ref", None):
                         self._bus_ref.unregister(node_id)
-                    frame.inner.shutdown()
+                    inner.shutdown()
+                elif isinstance(inner, DebugMonitorWidget):
+                    inner.shutdown()
                 self._scene.removeItem(proxy)
                 del self.proxies[i]
                 if self.focused_frame is frame:
@@ -419,6 +426,10 @@ class CanvasView(QGraphicsView):
                 return True
             if ctrl_only and key == Qt.Key.Key_Tab:
                 self._focus_next()
+                return True
+            if (mods == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+                    and key == Qt.Key.Key_D):
+                self.debug_monitor_requested.emit()
                 return True
             # Alt + 1..9 — foca o N-esimo terminal (ordem da topbar)
             if mods == Qt.KeyboardModifier.AltModifier:

@@ -34,6 +34,7 @@ class TopBar(QWidget):
     add_note           = pyqtSignal()
     add_agent          = pyqtSignal()
     add_prompt         = pyqtSignal()
+    add_debug          = pyqtSignal()
     accent_changed     = pyqtSignal(str)
     toggle_sidebar     = pyqtSignal()
 
@@ -94,6 +95,7 @@ class TopBar(QWidget):
             ("Nota",       self.add_note.emit),
             ("Prompt",     self.add_prompt.emit),
             ("Agent",      self.add_agent.emit),
+            ("Debug",      self.add_debug.emit),
         ]:
             b = self._add_btn(label)
             b.clicked.connect(slot)

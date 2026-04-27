@@ -47,7 +47,11 @@ def save_session(canvas, accent_color=ACCENT):
                 "content": frame.inner.text(),
             })
         else:
-            continue
+            from .monitor import DebugMonitorWidget
+            if isinstance(frame.inner, DebugMonitorWidget):
+                base.update({"type": "debug_monitor"})
+            else:
+                continue
         nodes.append(base)
 
     frame_list = [f for _, f in canvas.proxies]

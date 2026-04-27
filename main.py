@@ -55,12 +55,14 @@ class MainWindow(QMainWindow):
         self.topbar.add_note.connect(self._add_note)
         self.topbar.add_agent.connect(self._add_agent)
         self.topbar.add_prompt.connect(self._add_prompt)
+        self.topbar.add_debug.connect(self._add_debug_monitor)
         self.topbar.accent_changed.connect(self._on_accent_changed)
         self.topbar.toggle_sidebar.connect(self.sidebar.toggle)
         self.sidebar.terminal_clicked.connect(self.canvas.focus_and_center)
 
         self.canvas.nodes_changed.connect(self._refresh_sidebar)
         self.canvas.new_terminal_requested.connect(lambda: self._add_term("powershell.exe"))
+        self.canvas.debug_monitor_requested.connect(self._add_debug_monitor)
 
         # Layout: topbar em cima; abaixo, sidebar (esquerda) + canvas (direita)
         central = QWidget()
@@ -146,6 +148,11 @@ class MainWindow(QMainWindow):
                 p.setText(node.get("content", ""))
                 frame = self.canvas.add_node(p, name, size=(w, h), icon=icon)
                 p.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+
+            elif ntype == "debug_monitor":
+                from termicanvas.monitor import DebugMonitorWidget
+                widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
+                frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
 
             else:
                 continue
@@ -333,6 +340,16 @@ class MainWindow(QMainWindow):
         p = PromptCard()
         frame = self.canvas.add_node(p, "Prompt", size=(420, 280))
         p.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+
+    def _add_debug_monitor(self):
+        """Open the Debug Monitor or focus the existing one. No duplicates."""
+        from termicanvas.monitor import DebugMonitorWidget
+        for proxy, frame in self.canvas.proxies:
+            if isinstance(frame.inner, DebugMonitorWidget):
+                self.canvas.focus_and_center(frame)
+                return
+        widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
+        self.canvas.add_node(widget, "Debug Monitor", size=(560, 600), icon="🐛")
 
     def _route_output(self, source_frame, text):
         for src, tgt in self.canvas.connections:
