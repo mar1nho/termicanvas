@@ -216,3 +216,50 @@ def test_topbar_emits_bus_toggled_with_inverse_of_current_state(qt_app):
     bar.set_bus_state(False)
     bar._bus_button.clicked.emit(True)
     assert received == [False, True]
+
+
+def test_bus_lifecycle_creates_and_clears_port_file(qt_app, tmp_path, monkeypatch):
+    """Bus.start writes the port file; Bus.stop removes it. This is the disk
+    contract that _enable_bus / _disable_bus rely on."""
+    from termicanvas import config as config_mod
+    from termicanvas import bus as bus_mod
+    fake_port_file = tmp_path / "bus.port"
+    monkeypatch.setattr(config_mod, "BUS_PORT_FILE", fake_port_file)
+    monkeypatch.setattr(bus_mod,    "BUS_PORT_FILE", fake_port_file)
+
+    bus = bus_mod.Bus()
+    bus.start(canvas=None)
+    try:
+        assert bus.port() is not None and bus.port() > 0
+        assert fake_port_file.exists()
+        assert int(fake_port_file.read_text(encoding="utf-8")) == bus.port()
+    finally:
+        bus.stop()
+
+    # Bus.stop must clear the port file (disk contract relied on by the CLI).
+    assert not fake_port_file.exists()
+
+
+def test_bus_can_be_started_again_after_stop(qt_app, tmp_path, monkeypatch):
+    """After Bus.stop, a fresh Bus.start succeeds — the lifecycle is reentrant.
+    This is what _on_bus_toggled relies on when the user flips OFF then ON."""
+    from termicanvas import config as config_mod
+    from termicanvas import bus as bus_mod
+    fake_port_file = tmp_path / "bus.port"
+    monkeypatch.setattr(config_mod, "BUS_PORT_FILE", fake_port_file)
+    monkeypatch.setattr(bus_mod,    "BUS_PORT_FILE", fake_port_file)
+
+    bus = bus_mod.Bus()
+    bus.start(canvas=None)
+    first_port = bus.port()
+    bus.stop()
+    assert not fake_port_file.exists()
+
+    bus.start(canvas=None)
+    try:
+        second_port = bus.port()
+        assert second_port is not None and second_port > 0
+        assert fake_port_file.exists()
+        # Both ports are valid; OS may reuse the same number.
+    finally:
+        bus.stop()
