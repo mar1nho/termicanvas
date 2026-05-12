@@ -613,6 +613,18 @@ class TerminalsSidebar(QWidget):
         self._collapsed = not self._collapsed
         self.setFixedWidth(self.COLLAPSED_WIDTH if self._collapsed else self.DEFAULT_WIDTH)
         self._scroll.setVisible(not self._collapsed)
+        # Esconde explicitamente cada widget interno — setVisible no parent
+        # nao tava propagando 100% (chip close_btns ficavam visiveis ainda na
+        # sidebar de 44px com nome cortado).
+        visible = not self._collapsed
+        self._term_header.setVisible(visible)
+        self._snap_header.setVisible(visible)
+        self._empty.setVisible(visible and self._term_header.is_expanded() and len(self.chips) == 0)
+        self._snap_empty.setVisible(visible and self._snap_header.is_expanded() and len(self._snap_chips) == 0)
+        for chip in self.chips.values():
+            chip.setVisible(visible and self._term_header.is_expanded())
+        for chip in self._snap_chips:
+            chip.setVisible(visible and self._snap_header.is_expanded())
         self.collapse_toggled.emit(self._collapsed)
 
     # ---------- tema (dark/light) ----------

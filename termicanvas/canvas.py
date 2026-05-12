@@ -253,7 +253,9 @@ class CanvasView(QGraphicsView):
 
     def _draw_chain(self, painter, parent_proxy, parent_frame, child_proxy, child_frame):
         """Desenha 1 chain como catenaria — curva cubica com sag proporcional
-        a distancia entre pontos, simulando uma corrente pendurada."""
+        a distancia entre pontos, simulando uma corrente pendurada. Detecta
+        outros nodes no caminho e empurra o sag pra baixo ate passar por baixo
+        deles (simulando colisao com objetos rigidos)."""
         from math import hypot
 
         # Bottom-center do pai -> top-center do filho.
@@ -266,16 +268,50 @@ class CanvasView(QGraphicsView):
             child_proxy.pos().y(),
         )
 
-        # Sag (afundamento) cresce com a distancia — corda mais longa pende mais.
+        # Coleta obstaculos (outros frames cujo bbox horizontal intersecta o
+        # range da corrente). Ignora parent e child.
+        x_min = min(p1.x(), p2.x()) - 10
+        x_max = max(p1.x(), p2.x()) + 10
+        obstacles = []
+        for proxy, frame in self.proxies:
+            if frame is parent_frame or frame is child_frame:
+                continue
+            rect = QRectF(proxy.pos().x(), proxy.pos().y(), frame.width(), frame.height())
+            if rect.right() < x_min or rect.left() > x_max:
+                continue
+            obstacles.append(rect.adjusted(-5, -5, 5, 5))  # margem leve
+
+        # Sag inicial proporcional a distancia + override pra passar por baixo
+        # de qualquer obstaculo no caminho horizontal.
         dist = hypot(p2.x() - p1.x(), p2.y() - p1.y())
         sag  = 30 + dist * 0.18
-        # Controle abaixo do ponto mais baixo dos dois — garante curva pra baixo.
-        bottom_y = max(p1.y(), p2.y()) + sag
-        ctrl1 = QPointF(p1.x(), bottom_y)
-        ctrl2 = QPointF(p2.x(), bottom_y)
+        target_bottom = max(p1.y(), p2.y()) + sag
+        for rect in obstacles:
+            target_bottom = max(target_bottom, rect.bottom() + 30)
 
+        # Loop iterativo: amostra a curva, se algum ponto cai dentro de um
+        # obstaculo, empurra mais pra baixo. Max 8 tentativas.
         path = QPainterPath(p1)
-        path.cubicTo(ctrl1, ctrl2, p2)
+        for _attempt in range(8):
+            path = QPainterPath(p1)
+            path.cubicTo(
+                QPointF(p1.x(), target_bottom),
+                QPointF(p2.x(), target_bottom),
+                p2,
+            )
+            collides = False
+            for i in range(1, 30):
+                t = i / 30
+                pt = path.pointAtPercent(t)
+                for rect in obstacles:
+                    if rect.contains(pt):
+                        collides = True
+                        break
+                if collides:
+                    break
+            if not collides:
+                break
+            target_bottom += 40  # empurra mais pra baixo e tenta de novo
 
         # Cor adapta ao tema: cinza medio em ambos, mas diferente alpha.
         if self._light_mode:
