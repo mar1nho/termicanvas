@@ -251,54 +251,105 @@ class CanvasView(QGraphicsView):
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         self._scene.update()
 
+    @staticmethod
+    def _pick_chain_anchors(parent_rect, child_rect):
+        """Escolhe pontos de saida e entrada conforme posicao relativa dos
+        bboxes. Retorna (p1, dir1, p2, dir2) onde dir e uma das strings
+        'right'/'left'/'down'/'up'.
+
+        Direcao dominante: se distancia horizontal > vertical, usa laterais;
+        senao, usa top/bottom. Isso produz curvas em S naturais.
+        """
+        pc = parent_rect.center()
+        cc = child_rect.center()
+        dx = cc.x() - pc.x()
+        dy = cc.y() - pc.y()
+
+        if abs(dx) > abs(dy):
+            if dx > 0:
+                # Child a direita do pai
+                p1 = QPointF(parent_rect.right(), pc.y())
+                p2 = QPointF(child_rect.left(), cc.y())
+                return p1, "right", p2, "left"
+            else:
+                # Child a esquerda do pai
+                p1 = QPointF(parent_rect.left(), pc.y())
+                p2 = QPointF(child_rect.right(), cc.y())
+                return p1, "left", p2, "right"
+        else:
+            if dy >= 0:
+                # Child abaixo do pai (caso comum no spawn)
+                p1 = QPointF(pc.x(), parent_rect.bottom())
+                p2 = QPointF(cc.x(), child_rect.top())
+                return p1, "down", p2, "up"
+            else:
+                # Child acima do pai
+                p1 = QPointF(pc.x(), parent_rect.top())
+                p2 = QPointF(cc.x(), child_rect.bottom())
+                return p1, "up", p2, "down"
+
+    @staticmethod
+    def _offset_in_direction(point, direction, dist):
+        """Retorna ponto deslocado `dist` unidades na direcao indicada."""
+        if direction == "right":
+            return QPointF(point.x() + dist, point.y())
+        if direction == "left":
+            return QPointF(point.x() - dist, point.y())
+        if direction == "down":
+            return QPointF(point.x(), point.y() + dist)
+        if direction == "up":
+            return QPointF(point.x(), point.y() - dist)
+        return QPointF(point)
+
     def _draw_chain(self, painter, parent_proxy, parent_frame, child_proxy, child_frame):
-        """Desenha 1 chain como catenaria — curva cubica com sag proporcional
-        a distancia entre pontos, simulando uma corrente pendurada. Detecta
-        outros nodes no caminho e empurra o sag pra baixo ate passar por baixo
-        deles (simulando colisao com objetos rigidos)."""
+        """Desenha 1 chain como curva-S tracejada conectando o lado mais
+        proximo do parent ao lado mais proximo do child. Detecta obstaculos
+        no caminho e empurra control points perpendicularmente pra contornar
+        por fora (nao por baixo, como catenaria)."""
         from math import hypot
 
-        # Bottom-center do pai -> top-center do filho.
-        p1 = QPointF(
-            parent_proxy.pos().x() + parent_frame.width() / 2,
-            parent_proxy.pos().y() + parent_frame.height(),
+        parent_rect = QRectF(
+            parent_proxy.pos().x(), parent_proxy.pos().y(),
+            parent_frame.width(), parent_frame.height(),
         )
-        p2 = QPointF(
-            child_proxy.pos().x() + child_frame.width() / 2,
-            child_proxy.pos().y(),
+        child_rect = QRectF(
+            child_proxy.pos().x(), child_proxy.pos().y(),
+            child_frame.width(), child_frame.height(),
         )
+        p1, dir1, p2, dir2 = self._pick_chain_anchors(parent_rect, child_rect)
 
-        # Coleta obstaculos (outros frames cujo bbox horizontal intersecta o
-        # range da corrente). Ignora parent e child.
-        x_min = min(p1.x(), p2.x()) - 10
-        x_max = max(p1.x(), p2.x()) + 10
+        # Coleta obstaculos (todos os outros frames). Pra cubic-S a bbox de
+        # intersecao pode ser qualquer direcao — nao filtra por X.
         obstacles = []
         for proxy, frame in self.proxies:
             if frame is parent_frame or frame is child_frame:
                 continue
             rect = QRectF(proxy.pos().x(), proxy.pos().y(), frame.width(), frame.height())
-            if rect.right() < x_min or rect.left() > x_max:
-                continue
-            obstacles.append(rect.adjusted(-5, -5, 5, 5))  # margem leve
+            obstacles.append(rect.adjusted(-5, -5, 5, 5))
 
-        # Sag inicial proporcional a distancia + override pra passar por baixo
-        # de qualquer obstaculo no caminho horizontal.
+        # Offset proporcional a distancia — control points "empurram" pra fora
+        # do node na direcao de saida/entrada, criando curva em S suave.
         dist = hypot(p2.x() - p1.x(), p2.y() - p1.y())
-        sag  = 30 + dist * 0.18
-        target_bottom = max(p1.y(), p2.y()) + sag
-        for rect in obstacles:
-            target_bottom = max(target_bottom, rect.bottom() + 30)
+        base_offset = max(50.0, dist * 0.35)
 
-        # Loop iterativo: amostra a curva, se algum ponto cai dentro de um
-        # obstaculo, empurra mais pra baixo. Max 8 tentativas.
+        # Perpendicular usado pra desviar de obstaculos. Se routing eh horizontal
+        # (right/left), perpendicular eh vertical; se vertical, perpendicular eh
+        # horizontal.
+        perp_dir = "down" if dir1 in ("right", "left") else "right"
+        perp_offset = 0.0
+
         path = QPainterPath(p1)
         for _attempt in range(8):
+            ctrl1 = self._offset_in_direction(p1, dir1, base_offset)
+            ctrl2 = self._offset_in_direction(p2, dir2, base_offset)
+            if perp_offset:
+                ctrl1 = self._offset_in_direction(ctrl1, perp_dir, perp_offset)
+                ctrl2 = self._offset_in_direction(ctrl2, perp_dir, perp_offset)
             path = QPainterPath(p1)
-            path.cubicTo(
-                QPointF(p1.x(), target_bottom),
-                QPointF(p2.x(), target_bottom),
-                p2,
-            )
+            path.cubicTo(ctrl1, ctrl2, p2)
+
+            # Amostra 30 pontos; se algum cai dentro de obstaculo, empurra
+            # perpendicularmente e tenta de novo.
             collides = False
             for i in range(1, 30):
                 t = i / 30
@@ -311,14 +362,15 @@ class CanvasView(QGraphicsView):
                     break
             if not collides:
                 break
-            target_bottom += 40  # empurra mais pra baixo e tenta de novo
+            perp_offset += 50  # empurra mais pra fora a cada iteracao
 
-        # Cor adapta ao tema: cinza medio em ambos, mas diferente alpha.
+        # Estilo igual da referencia: tracejado fino e sutil.
         if self._light_mode:
-            line_color = QColor(80, 80, 80, 200)
+            line_color = QColor(80, 80, 80, 170)
         else:
-            line_color = QColor(180, 180, 180, 180)
-        pen = QPen(line_color, 2.2)
+            line_color = QColor(200, 200, 200, 150)
+        pen = QPen(line_color, 1.5)
+        pen.setDashPattern([4.0, 4.0])
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -337,25 +389,30 @@ class CanvasView(QGraphicsView):
                 continue
             self._draw_chain(painter, parent_proxy, parent_frame, child_proxy, child_frame)
 
-        # Rubber-band durante modo de chain manual: catenaria tracejada do
-        # bottom do source ate o cursor.
+        # Rubber-band durante modo de chain manual: curva S tracejada do
+        # lado mais proximo do source ate o cursor.
         if self._chaining and self._chain_source is not None:
             src_proxy = next((p for p, f in self.proxies if f is self._chain_source), None)
             if src_proxy is not None:
                 from math import hypot
-                p1 = QPointF(
-                    src_proxy.pos().x() + self._chain_source.width() / 2,
-                    src_proxy.pos().y() + self._chain_source.height(),
+                # Cria um rect virtual de 1x1 no cursor pra reusar _pick_chain_anchors.
+                src_rect = QRectF(
+                    src_proxy.pos().x(), src_proxy.pos().y(),
+                    self._chain_source.width(), self._chain_source.height(),
                 )
-                p2 = self._chain_mouse
+                cursor_rect = QRectF(
+                    self._chain_mouse.x() - 1, self._chain_mouse.y() - 1, 2, 2,
+                )
+                p1, dir1, p2, dir2 = self._pick_chain_anchors(src_rect, cursor_rect)
                 dist = hypot(p2.x() - p1.x(), p2.y() - p1.y())
-                sag  = 30 + dist * 0.18
-                bottom_y = max(p1.y(), p2.y()) + sag
+                base_offset = max(50.0, dist * 0.35)
+                ctrl1 = self._offset_in_direction(p1, dir1, base_offset)
+                ctrl2 = self._offset_in_direction(p2, dir2, base_offset)
                 path = QPainterPath(p1)
-                path.cubicTo(QPointF(p1.x(), bottom_y), QPointF(p2.x(), bottom_y), p2)
-                line_color = QColor(80, 80, 80, 200) if self._light_mode else QColor(180, 180, 180, 180)
-                pen = QPen(line_color, 2.2)
-                pen.setStyle(Qt.PenStyle.DashLine)
+                path.cubicTo(ctrl1, ctrl2, p2)
+                line_color = QColor(80, 80, 80, 170) if self._light_mode else QColor(200, 200, 200, 150)
+                pen = QPen(line_color, 1.5)
+                pen.setDashPattern([4.0, 4.0])
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
