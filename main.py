@@ -34,6 +34,9 @@ from termicanvas.dialogs import (
     TerminalLaunchDialog,
 )
 from termicanvas.diagnostics import record_error
+from termicanvas.insert_controller import InsertController, InsertState
+from termicanvas.island import ToolIsland
+from termicanvas.node_factory import NodeFactory
 from termicanvas.roles import seed_roles
 from termicanvas.session import load_session, save_session
 from termicanvas.sidebar import TerminalsSidebar
@@ -67,16 +70,36 @@ class MainWindow(QMainWindow):
         self.canvas._bus_ref = self.bus
         self.sidebar = TerminalsSidebar()
 
-        self.topbar = TopBar()
-        self.topbar.add_terminal.connect(lambda shell: self._add_term(shell))
-        self.topbar.add_agent_terminal.connect(self._add_agent_terminal)
-        self.topbar.add_note.connect(self._add_note)
-        self.topbar.add_agent.connect(self._add_agent)
-        self.topbar.add_prompt.connect(self._add_prompt)
-        self.topbar.add_debug.connect(self._add_debug_monitor)
+        self.factory = NodeFactory(self)
+
+        self.topbar = TopBar(parent=self.canvas)
         self.topbar.accent_changed.connect(self._on_accent_changed)
-        self.topbar.toggle_sidebar.connect(self.sidebar.toggle)
+        self.sidebar.collapse_toggled.connect(
+            lambda _: QTimer.singleShot(0, self._reposition_overlays)
+        )
         self.topbar.bus_toggled.connect(self._on_bus_toggled)
+
+        # Tool Island (overlay no canvas) + InsertController (state machine)
+        self.island = ToolIsland(parent=self.canvas)
+        self._island_manual_position = False
+        self.insert = InsertController(parent=self)
+
+        self.island.tool_armed.connect(self.insert.arm)
+        self.island.tool_doubled.connect(
+            lambda kind: self.factory.create(kind, with_dialog=False)
+        )
+        self.island.user_moved.connect(self._on_island_user_moved)
+        self.canvas.island_center_requested.connect(self._center_island)
+        self.insert.armed_kind_changed.connect(self.island.set_armed_kind)
+        self.insert.state_changed.connect(self._on_insert_state_changed)
+        self.insert.drag_updated.connect(self.canvas.show_drag_preview)
+        self.insert.commit_requested.connect(self._on_insert_commit)
+        self.canvas.insert_press.connect(self.insert.start_drag)
+        self.canvas.insert_move.connect(self.insert.update_drag)
+        self.canvas.insert_release.connect(self.insert.finish_drag)
+        self.canvas.insert_escape.connect(self.insert.disarm)
+
+        QApplication.instance().installEventFilter(self)
         self.sidebar.terminal_clicked.connect(self.canvas.focus_and_center)
         self.sidebar.snapshot_save_requested.connect(self._on_snapshot_save_requested)
         self.sidebar.snapshot_load_requested.connect(self._on_snapshot_load_requested)
@@ -88,12 +111,12 @@ class MainWindow(QMainWindow):
         self.canvas.new_terminal_requested.connect(lambda: self._add_term("powershell.exe"))
         self.canvas.debug_monitor_requested.connect(self._add_debug_monitor)
 
-        # Layout: topbar em cima; abaixo, sidebar (esquerda) + canvas (direita)
+        # Layout: sidebar (esquerda) + canvas (direita). Controles de topo sao
+        # overlays do canvas, nao ocupam espaco no layout.
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self.topbar)
 
         body = QWidget()
         body_layout = QHBoxLayout(body)
@@ -139,14 +162,14 @@ class MainWindow(QMainWindow):
         self._apply_session_viewport(data)
 
     def _load_session_nodes(self, data):
+        # Nodes herdam a accent global via canvas.add_node — campos color e
+        # custom_color persistidos em sessoes antigas sao ignorados.
         for node in data.get("nodes", []):
             ntype = node.get("type")
             name  = node.get("name", "Terminal")
             icon  = node.get("icon", "")
             x, y  = node.get("x", 0.0), node.get("y", 0.0)
             w, h  = node.get("w", 720), node.get("h", 460)
-            color = node.get("color", ACCENT)
-            custom = node.get("custom_color", False)
 
             if ntype == "terminal":
                 shell         = node.get("shell", "powershell.exe")
@@ -174,7 +197,6 @@ class MainWindow(QMainWindow):
                     lambda title, tid=t.node_id: self.bus.update_name(tid, title)
                 )
                 t._apply_font()
-                frame.set_node_color(color, custom=custom)
                 self.last_terminal = t
                 t.activity_changed.connect(lambda _: self._refresh_sidebar())
 
@@ -182,27 +204,23 @@ class MainWindow(QMainWindow):
                 content = node.get("content", "")
                 n = NoteWidget()
                 n.setPlainText(content)
-                frame = self.canvas.add_node(n, name, size=(w, h), icon=icon)
-                frame.set_node_color(color, custom=custom)
+                self.canvas.add_node(n, name, size=(w, h), icon=icon)
 
             elif ntype == "agent":
                 a = AgentWidget()
                 frame = self.canvas.add_node(a, name, size=(w, h), icon=icon)
                 a.route_output.connect(lambda text, f=frame: self._route_output(f, text))
-                frame.set_node_color(color, custom=custom)
 
             elif ntype == "prompt":
                 p = PromptCard()
                 p.setText(node.get("content", ""))
                 frame = self.canvas.add_node(p, name, size=(w, h), icon=icon)
                 p.route_output.connect(lambda text, f=frame: self._route_output(f, text))
-                frame.set_node_color(color, custom=custom)
 
             elif ntype == "debug_monitor":
                 from termicanvas.monitor import DebugMonitorWidget
                 widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
-                frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
-                frame.set_node_color(color, custom=custom)
+                self.canvas.add_node(widget, name, size=(w, h), icon=icon)
 
             else:
                 continue
@@ -232,10 +250,11 @@ class MainWindow(QMainWindow):
         self.canvas.horizontalScrollBar().setValue(scroll_h)
         self.canvas.verticalScrollBar().setValue(scroll_v)
 
-        if accent != ACCENT:
-            self.topbar._accent_color = accent
-            self.topbar._update_swatch()
-            self._on_accent_changed(accent)
+        # Sempre propaga a accent persistida — _on_accent_changed se encarrega
+        # de sincronizar canvas, sidebar e nav (idempotente quando == ACCENT).
+        self.topbar._accent_color = accent
+        self.topbar._update_swatch()
+        self._on_accent_changed(accent)
 
     # ---------- helpers ----------
 
@@ -243,12 +262,12 @@ class MainWindow(QMainWindow):
         self.sidebar.sync(self.canvas)
 
     def _on_accent_changed(self, color):
+        # Sincroniza o canvas pra que nodes futuros nascam com a cor nova.
+        self.canvas.set_accent(color)
         for proxy, frame in self.canvas.proxies:
-            if not frame._custom_color:
-                frame.set_node_color(color)
+            frame.set_node_color(color)
         for chip in self.sidebar.chips.values():
-            if not chip._custom_accent:
-                chip.set_accent(color)
+            chip.set_accent(color)
         self.canvas._nav.set_accent(color)
 
     def _make_terminal(self, shell, cwd, agent_kind=None, role_name=None, manifest_mode="existing"):
@@ -313,96 +332,27 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     # ---------- adicionadores ----------
+    # Wrappers finos sobre NodeFactory. A logica de criacao vive em
+    # termicanvas/node_factory.py.
 
     def _add_term(self, shell):
-        pretty_shell = {
-            "powershell.exe": "PowerShell",
-            "pwsh.exe":       "PowerShell 7",
-            "cmd.exe":        "CMD",
-        }.get(shell, shell)
-
-        default_name = f"{pretty_shell} {self._terminal_counter + 1}"
-        dialog = TerminalLaunchDialog(pretty_shell, default_name=default_name, parent=self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        cwd         = dialog.chosen_cwd()
-        chosen_name = dialog.chosen_name()
-        chosen_icon = dialog.chosen_icon()
-
-        if cwd and cwd != DEFAULT_CWD:
-            set_last_custom_cwd(cwd)
-
-        self._terminal_counter += 1
-        t     = self._make_terminal(shell=shell, cwd=cwd)
-        frame = self.canvas.add_node(t, chosen_name, size=(720, 460), icon=chosen_icon)
-        self._register_terminal(t, frame, chosen_name)
-        frame.header.title_changed.connect(
-            lambda title, tid=t.node_id: self.bus.update_name(tid, title)
-        )
-        self.last_terminal = t
-        t.activity_changed.connect(lambda _: self._refresh_sidebar())
+        kind = {"powershell.exe": "powershell", "cmd.exe": "cmd"}.get(shell, "powershell")
+        return self.factory.create(kind, with_dialog=True)
 
     def _add_agent_terminal(self, agent_kind):
-        if agent_kind not in AGENT_KINDS:
-            return
-        spec  = AGENT_KINDS[agent_kind]
-        label = spec["label"]
-
-        default_name = f"{label} {self._terminal_counter + 1}"
-        dialog = TerminalLaunchDialog(
-            label, default_name=default_name, parent=self, agent_kind=agent_kind,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        cwd         = dialog.chosen_cwd()
-        chosen_name = dialog.chosen_name()
-        chosen_icon = dialog.chosen_icon()
-        chosen_role = dialog.chosen_role()
-        chosen_mode = dialog.chosen_manifest_mode()
-
-        if cwd and cwd != DEFAULT_CWD:
-            set_last_custom_cwd(cwd)
-
-        self._terminal_counter += 1
-        t     = self._make_terminal(
-            shell="powershell.exe", cwd=cwd,
-            agent_kind=agent_kind, role_name=chosen_role,
-            manifest_mode=chosen_mode,
-        )
-        frame = self.canvas.add_node(t, chosen_name, size=(820, 540), icon=chosen_icon)
-        self._register_terminal(t, frame, chosen_name)
-        self._wire_role_editor(t, frame)
-        self._wire_agent_controls(t, frame)
-        frame.header.title_changed.connect(
-            lambda title, tid=t.node_id: self.bus.update_name(tid, title)
-        )
-        self.last_terminal = t
-        t.activity_changed.connect(lambda _: self._refresh_sidebar())
+        return self.factory.create(agent_kind, with_dialog=True)
 
     def _add_note(self):
-        n = NoteWidget()
-        self.canvas.add_node(n, "Nota", size=(340, 280))
+        return self.factory.create("note")
 
     def _add_agent(self):
-        a = AgentWidget()
-        frame = self.canvas.add_node(a, "Agent", size=(480, 580))
-        a.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+        return self.factory.create("agent")
 
     def _add_prompt(self):
-        p = PromptCard()
-        frame = self.canvas.add_node(p, "Prompt", size=(420, 280))
-        p.route_output.connect(lambda text, f=frame: self._route_output(f, text))
+        return self.factory.create("prompt")
 
     def _add_debug_monitor(self):
-        """Open the Debug Monitor or focus the existing one. No duplicates."""
-        from termicanvas.monitor import DebugMonitorWidget
-        for proxy, frame in self.canvas.proxies:
-            if isinstance(frame.inner, DebugMonitorWidget):
-                self.canvas.focus_and_center(frame)
-                return
-        widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
-        self.canvas.add_node(widget, "Debug Monitor", size=(560, 600), icon="")
+        return self.factory.create("debug")
 
     def _route_output(self, source_frame, text):
         for src, tgt in self.canvas.connections:
@@ -412,6 +362,79 @@ class MainWindow(QMainWindow):
                 elif isinstance(tgt.inner, TerminalWidget):
                     tgt.inner.send(text)
                 break
+
+    # ---------- insert mode (drag-to-create) ----------
+
+    def _on_insert_state_changed(self, state):
+        active = state in (InsertState.ARMED, InsertState.DRAGGING)
+        self.canvas.set_insert_active(active)
+        if state != InsertState.DRAGGING:
+            self.canvas.clear_drag_preview()
+
+    def _on_insert_commit(self, kind, scene_rect, with_dialog):
+        # Snap rect ao grid antes de criar (mesmo grid usado no preview).
+        snapped = self.canvas._snap_rect(scene_rect)
+        self.factory.create(kind, geometry=snapped, with_dialog=with_dialog)
+        self.canvas.clear_drag_preview()
+
+    def _on_island_user_moved(self):
+        self._island_manual_position = True
+
+    def _center_island(self):
+        self._island_manual_position = False
+        self._reposition_island(force=True)
+
+    def _reposition_island(self, force=False):
+        if not hasattr(self, "island"):
+            return
+        if self._island_manual_position and not force:
+            return
+        margin = 12
+        cw = self.canvas.viewport().width()
+        iw = self.island.sizeHint().width()
+        ih = self.island.sizeHint().height()
+        x = max(margin, (cw - iw) // 2)
+        y = margin
+        self.island.setGeometry(x, y, iw, ih)
+        self.island.raise_()
+
+    def _reposition_topbar_overlay(self):
+        if not hasattr(self, "topbar"):
+            return
+        margin = 12
+        x = self.canvas.viewport().width() - self.topbar.width() - margin
+        y = 8
+        self.topbar.move(max(margin, x), y)
+        self.topbar.raise_()
+
+    def _reposition_overlays(self):
+        self._reposition_island()
+        self._reposition_topbar_overlay()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._reposition_overlays()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._reposition_overlays()
+
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if (event.type() == QEvent.Type.MouseButtonPress
+                and self.insert.state == InsertState.ARMED):
+            target = QApplication.widgetAt(event.globalPosition().toPoint())
+            if target is not None:
+                w = target
+                inside_canvas = False
+                while w is not None:
+                    if w is self.canvas or w is self.island:
+                        inside_canvas = True
+                        break
+                    w = w.parent()
+                if not inside_canvas:
+                    self.insert.disarm()
+        return super().eventFilter(obj, event)
 
     # ---------- bus toggle ----------
 

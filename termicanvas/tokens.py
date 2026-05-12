@@ -1,10 +1,10 @@
 """Design tokens: cores usadas em toda a UI + helpers de contraste."""
 
 BG_CANVAS   = "#000000"
-BG_SURFACE  = "#1a1a1a"
+BG_SURFACE  = "#000000"
 BG_SIDEBAR  = "#0a0a0a"
-BG_ELEVATED = "#242424"
-BG_TERMINAL = "#0f0f0f"
+BG_ELEVATED = "#2D2D2D"
+BG_TERMINAL = "#000000"
 
 BORDER       = "#333333"
 BORDER_HOVER = "#4a4a4a"

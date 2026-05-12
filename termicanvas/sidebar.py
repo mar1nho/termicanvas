@@ -47,10 +47,9 @@ class SidebarChip(QFrame):
 
     def __init__(self, frame):
         super().__init__()
-        self.frame          = frame
-        self._accent_color  = frame._node_color
-        self._custom_accent = False
-        self._is_focused    = False
+        self.frame         = frame
+        self._accent_color = frame._node_color
+        self._is_focused   = False
         self.setObjectName("schip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(54)
@@ -114,10 +113,8 @@ class SidebarChip(QFrame):
             #schip:hover {{ background: {BG_ELEVATED}; border-color: {BORDER_HOVER}; }}
         """)
 
-    def set_accent(self, color, custom=False):
+    def set_accent(self, color):
         self._accent_color = color
-        if custom:
-            self._custom_accent = True
         self._apply_style(self._is_focused)
 
     def set_focused(self, focused):
@@ -262,6 +259,7 @@ class TerminalsSidebar(QWidget):
     snapshot_delete_requested    = pyqtSignal(str)
 
     DEFAULT_WIDTH = 240
+    COLLAPSED_WIDTH = 44
 
     def __init__(self):
         super().__init__()
@@ -280,17 +278,18 @@ class TerminalsSidebar(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # Header com brand
         outer.addWidget(self._make_section_header("TERMINAIS"))
 
         # Lista scrollavel — duas secoes (terminais + snapshots) numa unica scroll area
-        scroll = QScrollArea(self)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet(f"""
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
             QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
             QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 3px; min-height: 20px; }}
@@ -305,7 +304,7 @@ class TerminalsSidebar(QWidget):
         self._col.setSpacing(6)
 
         # Empty-state label dos terminais
-        self._empty = QLabel("Nenhum terminal aberto.\nUse os botoes da topbar.")
+        self._empty = QLabel("Nenhum terminal aberto.\nUse a ilha de ferramentas.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet(f"""
             color: {TEXT_MUTED}; font-size: 8.5pt; background: transparent;
@@ -356,29 +355,48 @@ class TerminalsSidebar(QWidget):
 
         self._col.addStretch()
 
-        scroll.setWidget(self._inner)
-        outer.addWidget(scroll, 1)
+        self._scroll.setWidget(self._inner)
+        outer.addWidget(self._scroll, 1)
 
     def _make_section_header(self, text: str) -> QWidget:
         header = QWidget()
-        header.setFixedHeight(40)
+        header.setFixedHeight(34)
         header.setStyleSheet(f"background: transparent; border-bottom: 1px solid {BORDER};")
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(14, 0, 8, 0)
+        hl.setContentsMargins(8, 1, 4, 1)
         hl.setSpacing(8)
 
-        brand = QLabel(text)
-        brand.setStyleSheet(f"""
+        self._header_label = QLabel(text)
+        self._header_label.setStyleSheet(f"""
             color: {TEXT_MUTED}; font-size: 8.5pt; font-weight: 600;
             letter-spacing: 1.5px; background: transparent;
         """)
-        hl.addWidget(brand, 1)
+        hl.addWidget(self._header_label, 1)
+
+        self._toggle_btn = QPushButton()
+        self._toggle_btn.setIcon(get_icon("menu", color=TEXT_SECONDARY, size=22))
+        self._toggle_btn.setIconSize(QSize(22, 22))
+        self._toggle_btn.setFixedSize(32, 32)
+        self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._toggle_btn.setToolTip("Mostrar/ocultar lista de terminais")
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {BG_ELEVATED}; border-radius: 4px;
+            }}
+        """)
+        self._toggle_btn.clicked.connect(self.toggle)
+        hl.addWidget(self._toggle_btn)
         return header
 
     def toggle(self):
-        """Alterna colapsado/expandido. Pode ser chamado de fora (ex: botao na topbar)."""
+        """Alterna colapsado/expandido mantendo o botao preso na sidebar."""
         self._collapsed = not self._collapsed
-        self.setFixedWidth(0 if self._collapsed else self.DEFAULT_WIDTH)
+        self.setFixedWidth(self.COLLAPSED_WIDTH if self._collapsed else self.DEFAULT_WIDTH)
+        self._header_label.setVisible(not self._collapsed)
+        self._scroll.setVisible(not self._collapsed)
         self.collapse_toggled.emit(self._collapsed)
 
     def sync(self, canvas):
@@ -409,9 +427,6 @@ class TerminalsSidebar(QWidget):
                 )
                 frame.header.title_changed.connect(
                     lambda t, c=chip: c.set_title(t)
-                )
-                frame.header.color_picked.connect(
-                    lambda c, ch=chip: ch.set_accent(c, custom=True)
                 )
                 # insere antes do empty-state dos terminais (index 0)
                 self._col.insertWidget(0, chip)

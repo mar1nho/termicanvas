@@ -4,7 +4,6 @@ from PyQt6.QtCore import QEvent, QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
-    QColorDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -39,7 +38,6 @@ class NodeHeader(QWidget):
     icon_changed    = pyqtSignal(str)
     font_up_clicked   = pyqtSignal()
     font_down_clicked = pyqtSignal()
-    color_picked      = pyqtSignal(str)
     edit_role_clicked = pyqtSignal()
     auto_reply_toggled = pyqtSignal(bool)
 
@@ -49,7 +47,6 @@ class NodeHeader(QWidget):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._dragging     = False
         self._last_global  = None
-        self._accent_color = ACCENT
         self._is_focused   = False  # alimenta o indicador idle/ativo
         self._apply_style()
 
@@ -131,15 +128,6 @@ class NodeHeader(QWidget):
         self.auto_reply_btn.hide()
         layout.addWidget(self.auto_reply_btn)
 
-        self.color_btn = QPushButton()
-        self.color_btn.setFixedSize(16, 16)
-        self.color_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.color_btn.setToolTip("Cor da borda")
-        self.color_btn.clicked.connect(self._pick_color)
-        self.color_btn.hide()
-        self._update_color_btn()
-        layout.addWidget(self.color_btn)
-
         self.close_btn = QPushButton()
         self.close_btn.setIcon(get_icon("close", color=TEXT_SECONDARY, size=14))
         self.close_btn.setIconSize(QSize(14, 14))
@@ -168,35 +156,9 @@ class NodeHeader(QWidget):
         self.icon.setFixedWidth(28 if text else 0)
         self.icon.setHidden(not text)
 
-    def _update_color_btn(self):
-        self.color_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {self._accent_color};
-                border: 1px solid {BORDER_HOVER};
-                border-radius: 2px;
-            }}
-            QPushButton:hover {{ border-color: {TEXT_PRIMARY}; }}
-        """)
-
-    def _pick_color(self):
-        # NodeHeader lives inside a QGraphicsProxyWidget — passing `self` as the
-        # dialog parent makes Qt mis-position the modal and lose focus events.
-        # Use the top-level application window instead.
-        parent = QApplication.activeWindow()
-        color = QColorDialog.getColor(QColor(self._accent_color), parent, "Cor da borda")
-        if color.isValid():
-            self._accent_color = color.name()
-            self._update_color_btn()
-            self.color_picked.emit(self._accent_color)
-
-    def set_accent_color(self, color):
-        self._accent_color = color
-        self._update_color_btn()
-
     def show_font_controls(self):
         self.font_down_btn.show()
         self.font_up_btn.show()
-        self.color_btn.show()
 
     def show_role_btn(self):
         self.role_btn.show()
@@ -235,8 +197,8 @@ class NodeHeader(QWidget):
         self.setStyleSheet(f"""
             NodeHeader {{ background: {BG_ELEVATED};
                          border-bottom: 1px solid {BORDER};
-                         border-top-left-radius: 6px;
-                         border-top-right-radius: 6px; }}
+                         border-top-left-radius: 10px;
+                         border-top-right-radius: 10px; }}
         """)
 
     def set_focused(self, focused):
@@ -342,8 +304,7 @@ class NodeFrame(QFrame):
         super().__init__()
         self.inner         = inner
         self._focused      = False
-        self._node_color   = ACCENT
-        self._custom_color = False
+        self._node_color   = ACCENT  # sobrescrito por canvas.add_node com a accent global
         self.setObjectName("node")
         self.setMinimumSize(260, 180)
 
@@ -368,23 +329,15 @@ class NodeFrame(QFrame):
         self._apply_style()
 
     def _apply_style(self):
-        # If the user picked a custom color, always honor it (full when focused,
-        # thinner border when not). Otherwise the default rule applies: tint
-        # only when focused, neutral gray otherwise.
-        if self._custom_color:
-            border = safe_border_color(self._node_color)
-        else:
-            border = safe_border_color(self._node_color) if self._focused else BORDER
+        # Borda usa a accent global quando o node esta focado; neutra caso contrario.
+        border = safe_border_color(self._node_color) if self._focused else BORDER
         width  = 2 if self._focused else 1
         self.setStyleSheet(f"""
-            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 6px; }}
+            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 10px; }}
         """)
 
-    def set_node_color(self, color, custom=False):
+    def set_node_color(self, color):
         self._node_color = color
-        if custom:
-            self._custom_color = True
-        self.header.set_accent_color(color)
         self._apply_style()
 
     def set_focused(self, focused):

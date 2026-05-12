@@ -25,15 +25,14 @@ def serialize_canvas(canvas):
     nodes = []
     for proxy, frame in canvas.proxies:
         pos = proxy.pos()
+        # Cor por node nao e mais persistida — todos herdam a accent global no load.
         base = {
-            "name":         frame.header.title.text(),
-            "icon":         frame.icon_text() if hasattr(frame, "icon_text") else "",
-            "x":            pos.x(),
-            "y":            pos.y(),
-            "w":            frame.width(),
-            "h":            frame.height(),
-            "color":        frame._node_color,
-            "custom_color": frame._custom_color,
+            "name": frame.header.title.text(),
+            "icon": frame.icon_text() if hasattr(frame, "icon_text") else "",
+            "x":    pos.x(),
+            "y":    pos.y(),
+            "w":    frame.width(),
+            "h":    frame.height(),
         }
         if isinstance(frame.inner, TerminalWidget):
             base.update({

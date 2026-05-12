@@ -1,12 +1,13 @@
 """CanvasView (infinito, zoom/pan) + CanvasNav (overlay de navegacao)."""
 
-from PyQt6.QtCore import QEvent, QPointF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsItem,
     QGraphicsProxyWidget,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
@@ -40,6 +41,11 @@ class CanvasView(QGraphicsView):
     nodes_changed             = pyqtSignal()
     new_terminal_requested    = pyqtSignal()
     debug_monitor_requested   = pyqtSignal()
+    insert_press              = pyqtSignal(QPointF)
+    insert_move               = pyqtSignal(QPointF)
+    insert_release            = pyqtSignal(QPointF)
+    insert_escape             = pyqtSignal()
+    island_center_requested   = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -64,6 +70,9 @@ class CanvasView(QGraphicsView):
 
         self.proxies       = []
         self.focused_frame = None
+        # Cor de destaque atual — usada pra pintar a borda do node focado.
+        # MainWindow sincroniza via set_accent() ao mudar a accent global.
+        self._accent_color = ACCENT
 
         self.connections  = []   # [(src_frame, tgt_frame), ...]
         self._connecting  = False
@@ -75,6 +84,10 @@ class CanvasView(QGraphicsView):
         # getting stuck inside a single cell.
         self._virtual_pos: dict = {}    # proxy -> QPointF
         self._virtual_size: dict = {}   # frame -> (float w, float h)
+
+        # Insert mode (driven externally by InsertController)
+        self._insert_active = False
+        self._drag_preview: QGraphicsRectItem | None = None
 
         QApplication.instance().installEventFilter(self)
 
@@ -122,6 +135,33 @@ class CanvasView(QGraphicsView):
             if int((y - top) / step) % 5 == 0:
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
             y += step
+
+        # Sombra externa dos nodes (estilo janela macOS).
+        # QGraphicsDropShadowEffect quebra QPlainTextEdit em proxy widget — ja
+        # foi tentado e revertido. Aqui pintamos 4 camadas concentricas com
+        # alpha decrescente direto no background da scene, antes dos items
+        # serem renderizados em cima. Custo despresivel (~0.1ms por node).
+        painter.setPen(Qt.PenStyle.NoPen)
+        # (expansao, alpha) — de fora (mais difusa) pra dentro (mais opaca)
+        shadow_layers = ((18, 12), (12, 22), (7, 40), (3, 70))
+        offset_y = 8
+        radius = 10
+        for proxy, frame in self.proxies:
+            pos = proxy.pos()
+            w, h = frame.width(), frame.height()
+            # Skip se o node estiver fora do rect visivel (otimizacao)
+            node_rect = QRectF(pos.x(), pos.y(), w, h)
+            if not rect.intersects(node_rect.adjusted(-20, -20, 20, 28)):
+                continue
+            for expand, alpha in shadow_layers:
+                shadow_rect = QRectF(
+                    pos.x() - expand,
+                    pos.y() - expand + offset_y,
+                    w + 2 * expand,
+                    h + 2 * expand,
+                )
+                painter.setBrush(QBrush(QColor(0, 0, 0, alpha)))
+                painter.drawRoundedRect(shadow_rect, radius + expand, radius + expand)
 
     def drawForeground(self, painter, rect):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -213,9 +253,17 @@ class CanvasView(QGraphicsView):
         self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         self._scene.update()
 
+    def set_accent(self, color):
+        """Atualiza a accent que sera usada em nodes novos e refletida na
+        borda dos ja existentes. MainWindow chama isso em sync com a topbar."""
+        self._accent_color = color
+
     def add_node(self, inner_widget, title, size=(720, 460), icon=""):
         frame = NodeFrame(title, inner_widget, icon=icon)
         frame.resize(*size)
+        # Aplica a accent global antes de inserir, garantindo que nodes novos
+        # nascam com a cor atual em vez do ACCENT default hardcoded.
+        frame.set_node_color(self._accent_color)
 
         proxy = self._scene.addWidget(frame)
         proxy.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -238,14 +286,6 @@ class CanvasView(QGraphicsView):
             frame.header.show_font_controls()
             frame.header.font_up_clicked.connect(inner_widget.font_up)
             frame.header.font_down_clicked.connect(inner_widget.font_down)
-            frame.header.color_picked.connect(
-                lambda c, f=frame: f.set_node_color(c, custom=True)
-            )
-        elif isinstance(inner_widget, (AgentWidget, PromptCard)):
-            frame.header.color_btn.show()
-            frame.header.color_picked.connect(
-                lambda c, f=frame: f.set_node_color(c, custom=True)
-            )
 
         self.proxies.append((proxy, frame))
         self._focus(frame)
@@ -295,6 +335,51 @@ class CanvasView(QGraphicsView):
 
     def _alt_held(self):
         return bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+
+    # ---------- Insert mode (driven by InsertController) ----------
+
+    def set_insert_active(self, active: bool):
+        """Liga/desliga modo de inserção. Quando ativo, cliques no canvas
+        emitem insert_press/insert_move/insert_release ao invés de pan/foco."""
+        self._insert_active = bool(active)
+        if active:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            self.clear_drag_preview()
+
+    def show_drag_preview(self, scene_rect: QRectF):
+        """Mostra/atualiza retângulo translúcido durante DRAGGING (snap 40px)."""
+        snapped = self._snap_rect(scene_rect)
+        if self._drag_preview is None:
+            self._drag_preview = QGraphicsRectItem()
+            pen = QPen(QColor(ACCENT), 1.2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            self._drag_preview.setPen(pen)
+            r, g, b = self._accent_rgb()
+            self._drag_preview.setBrush(QBrush(QColor(r, g, b, 26)))
+            self._drag_preview.setZValue(9999)
+            self._scene.addItem(self._drag_preview)
+        self._drag_preview.setRect(snapped)
+
+    def clear_drag_preview(self):
+        if self._drag_preview is not None:
+            self._scene.removeItem(self._drag_preview)
+            self._drag_preview = None
+
+    def _snap_rect(self, rect: QRectF) -> QRectF:
+        if self._alt_held():
+            return rect
+        step = self.GRID_STEP
+        x = round(rect.x() / step) * step
+        y = round(rect.y() / step) * step
+        w = round(rect.width() / step) * step
+        h = round(rect.height() / step) * step
+        return QRectF(x, y, w, h)
+
+    def _accent_rgb(self):
+        c = QColor(ACCENT)
+        return (c.red(), c.green(), c.blue())
 
     def _focus(self, frame):
         for proxy, f in self.proxies:
@@ -408,6 +493,11 @@ class CanvasView(QGraphicsView):
         event.accept()
 
     def mousePressEvent(self, event):
+        if self._insert_active and event.button() == Qt.MouseButton.LeftButton:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self.insert_press.emit(scene_pos)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton or (
             event.button() == Qt.MouseButton.LeftButton and self._space_held
         ):
@@ -454,6 +544,10 @@ class CanvasView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._insert_active and event.buttons() & Qt.MouseButton.LeftButton:
+            self.insert_move.emit(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._panning:
             pos   = event.position().toPoint()
             delta = pos - self._pan_start
@@ -468,6 +562,10 @@ class CanvasView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._insert_active and event.button() == Qt.MouseButton.LeftButton:
+            self.insert_release.emit(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._panning:
             self._panning = False
             self.viewport().setCursor(
@@ -481,6 +579,10 @@ class CanvasView(QGraphicsView):
 
     def eventFilter(self, obj, event):
         et = event.type()
+        if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and self._insert_active:
+            self.insert_escape.emit()
+            event.accept()
+            return True
         if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self._space_held = True
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
@@ -562,6 +664,9 @@ class CanvasView(QGraphicsView):
         if self.transform().m11() > 0.15:
             self.scale(1 / 1.2, 1 / 1.2)
 
+    def center_island(self):
+        self.island_center_requested.emit()
+
 
 class CanvasNav(QWidget):
     def __init__(self, canvas):
@@ -586,6 +691,7 @@ class CanvasNav(QWidget):
             ("plus",   "Zoom in",        canvas.zoom_in,    None),
             (None,     "Resetar zoom",   canvas.reset_view, "1:1"),
             ("square", "Encaixar tudo",  canvas.fit_all,    None),
+            ("box",    "Centralizar ilha", canvas.center_island, None),
         ]
         for icon_name, tooltip, slot, text in nav_specs:
             b = QPushButton(text or "")
