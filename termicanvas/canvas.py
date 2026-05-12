@@ -78,10 +78,14 @@ class CanvasView(QGraphicsView):
         # topbar via set_light_mode().
         self._light_mode = False
 
-        self.connections  = []   # [(src_frame, tgt_frame), ...]
+        self.connections  = []   # [(src_frame, tgt_frame), ...] — Prompt/Agent edges
         self._connecting  = False
         self._conn_source = None
         self._conn_mouse  = QPointF(0, 0)
+        # Chains: parentesco entre orquestrador e agente spawnado. Desenhadas
+        # como catenaria (linha curva afundando por gravidade) ligando o
+        # bottom-center do pai ao top-center do filho.
+        self.chains       = []   # [(parent_frame, child_frame), ...]
 
         # Per-drag virtual position/size state — keeps the unsnapped target
         # so the cursor can accumulate sub-grid motion without the node
@@ -206,9 +210,68 @@ class CanvasView(QGraphicsView):
                 painter.setBrush(QBrush(QColor(0, 0, 0, alpha)))
                 painter.drawRoundedRect(shadow_rect, radius + expand, radius + expand)
 
+    def add_chain(self, parent_frame, child_frame):
+        """Adiciona um link de parentesco (orquestrador -> agente spawnado).
+        Evita duplicatas se o mesmo par ja existir."""
+        if parent_frame is None or child_frame is None:
+            return
+        if parent_frame is child_frame:
+            return
+        for p, c in self.chains:
+            if p is parent_frame and c is child_frame:
+                return
+        self.chains.append((parent_frame, child_frame))
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
+
+    def _draw_chain(self, painter, parent_proxy, parent_frame, child_proxy, child_frame):
+        """Desenha 1 chain como catenaria — curva cubica com sag proporcional
+        a distancia entre pontos, simulando uma corrente pendurada."""
+        from math import hypot
+
+        # Bottom-center do pai -> top-center do filho.
+        p1 = QPointF(
+            parent_proxy.pos().x() + parent_frame.width() / 2,
+            parent_proxy.pos().y() + parent_frame.height(),
+        )
+        p2 = QPointF(
+            child_proxy.pos().x() + child_frame.width() / 2,
+            child_proxy.pos().y(),
+        )
+
+        # Sag (afundamento) cresce com a distancia — corda mais longa pende mais.
+        dist = hypot(p2.x() - p1.x(), p2.y() - p1.y())
+        sag  = 30 + dist * 0.18
+        # Controle abaixo do ponto mais baixo dos dois — garante curva pra baixo.
+        bottom_y = max(p1.y(), p2.y()) + sag
+        ctrl1 = QPointF(p1.x(), bottom_y)
+        ctrl2 = QPointF(p2.x(), bottom_y)
+
+        path = QPainterPath(p1)
+        path.cubicTo(ctrl1, ctrl2, p2)
+
+        # Cor adapta ao tema: cinza medio em ambos, mas diferente alpha.
+        if self._light_mode:
+            line_color = QColor(80, 80, 80, 200)
+        else:
+            line_color = QColor(180, 180, 180, 180)
+        pen = QPen(line_color, 2.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+
     def drawForeground(self, painter, rect):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         PORT_R = 7
+
+        # Chains de spawn (orquestrador -> filho), pintadas ANTES das connections
+        # de prompt/agent — ficam visualmente "atras" das edges semanticas.
+        for parent_frame, child_frame in self.chains:
+            parent_proxy = next((p for p, f in self.proxies if f is parent_frame), None)
+            child_proxy  = next((p for p, f in self.proxies if f is child_frame), None)
+            if parent_proxy is None or child_proxy is None:
+                continue
+            self._draw_chain(painter, parent_proxy, parent_frame, child_proxy, child_frame)
 
         # conexões estabelecidas
         for src_frame, tgt_frame in self.connections:
@@ -456,6 +519,7 @@ class CanvasView(QGraphicsView):
                     self.focused_frame = None
                 break
         self.connections = [(s, t) for s, t in self.connections if s is not frame and t is not frame]
+        self.chains = [(p, c) for p, c in self.chains if p is not frame and c is not frame]
         self.nodes_changed.emit()
 
     def clear_all(self, bus=None):
@@ -493,6 +557,7 @@ class CanvasView(QGraphicsView):
 
         self.proxies.clear()
         self.connections.clear()
+        self.chains.clear()
         self.focused_frame = None
         self._virtual_pos.clear()
         self._virtual_size.clear()

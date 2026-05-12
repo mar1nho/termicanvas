@@ -243,6 +243,11 @@ class MainWindow(QMainWindow):
             if 0 <= src_idx < len(frame_list) and 0 <= tgt_idx < len(frame_list):
                 self.canvas.connections.append((frame_list[src_idx], frame_list[tgt_idx]))
 
+        # Chains de spawn (orquestrador -> agente filho).
+        for parent_idx, child_idx in data.get("chains", []):
+            if 0 <= parent_idx < len(frame_list) and 0 <= child_idx < len(frame_list):
+                self.canvas.chains.append((frame_list[parent_idx], frame_list[child_idx]))
+
         self._refresh_sidebar()
 
     def _apply_session_viewport(self, data):
@@ -363,14 +368,23 @@ class MainWindow(QMainWindow):
                 geometry = QRectF(new_x, new_y, w, h)
 
         # Cria o terminal sem dialog, no cwd preparado, com o nome dado.
+        # Captura o frame criado pra ligar uma chain (corrente) ao orquestrador.
         try:
-            self.factory.create(
+            new_frame = self.factory.create(
                 kind, with_dialog=False,
                 cwd=str(agent_dir), name=name,
                 geometry=geometry,
             )
         except Exception as e:
             record_error("main.spawn.factory", e)
+            new_frame = None
+
+        # Liga corrente do orquestrador (src.frame) ao agente recem-criado.
+        if new_frame is not None and src and src.frame is not None:
+            try:
+                self.canvas.add_chain(src.frame, new_frame)
+            except Exception as e:
+                record_error("main.spawn.chain", e)
 
     def _make_terminal(self, shell, cwd, agent_kind=None, role_name=None, manifest_mode="existing"):
         """Cria TerminalWidget com env_extra contendo URL do bus + node_id reservado."""

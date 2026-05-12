@@ -66,12 +66,18 @@ def serialize_canvas(canvas):
             conns.append([frame_list.index(src), frame_list.index(tgt)])
         except ValueError:
             pass
-    return nodes, conns
+    chains = []
+    for parent, child in getattr(canvas, "chains", []):
+        try:
+            chains.append([frame_list.index(parent), frame_list.index(child)])
+        except ValueError:
+            pass
+    return nodes, conns, chains
 
 
 def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warned=False,
                  snapshot_load_warned=False, light_mode=False):
-    nodes, conns = serialize_canvas(canvas)
+    nodes, conns, chains = serialize_canvas(canvas)
     canvas_data = {
         "scale":                 canvas.transform().m11(),
         "scroll_h":              canvas.horizontalScrollBar().value(),
@@ -83,9 +89,10 @@ def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warn
         "light_mode":            bool(light_mode),
     }
     data = {
-        "canvas": canvas_data,
-        "nodes": nodes,
+        "canvas":      canvas_data,
+        "nodes":       nodes,
         "connections": conns,
+        "chains":      chains,
     }
     try:
         SESSION_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

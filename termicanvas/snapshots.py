@@ -90,7 +90,7 @@ def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT,
 
     # Importacao tardia evita ciclo entre snapshots <-> session.
     from .session import serialize_canvas
-    nodes, connections = serialize_canvas(canvas)
+    nodes, connections, chains = serialize_canvas(canvas)
 
     created_at = now
     if path.exists():
@@ -116,6 +116,7 @@ def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT,
         },
         "nodes":       nodes,
         "connections": connections,
+        "chains":      chains,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return file_name
