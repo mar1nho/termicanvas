@@ -206,6 +206,52 @@ def _send_skill_instructions():
     )
 
 
+def spawn_response_instructions():
+    """Bloco apendido automaticamente em TODO manifesto de agente spawnado
+    via /spawn. Garante que o agente responda via bus em vez de escrever
+    no PTY como se houvesse humano lendo."""
+    return """## Como responder mensagens (TermiCanvas)
+
+Voce esta rodando dentro do TermiCanvas. Mensagens chegam injetadas no seu PTY
+com prefixo `[de: <nome>]`. Quando isso acontecer:
+
+1. **Nao existe usuario humano lendo seu terminal.** Apenas o orquestrador
+   (e outros agentes via bus) se comunicam com voce. Tudo eh maquina-a-maquina.
+2. **Responda APENAS via send**, nunca escrevendo no chat:
+   ```
+   python -m termicanvas.cli send <node_id_origem> "[<seu_papel>] resposta..."
+   ```
+   - O `node_id` do emissor esta no prefixo da mensagem que voce recebeu
+   - Se nao tiver certeza, rode `python -m termicanvas.cli list` pra ver quem
+     enviou (procure pelo `name`)
+3. **Apos enviar, fique idle silenciosamente** — nao escreva mensagem final
+   resumindo o que fez. O orquestrador nao precisa de eco.
+4. **Prefixe suas respostas** com `[<seu_papel>]` (ex: `[Jira Expert]`) pra
+   o orquestrador identificar a origem.
+5. Tarefas que falham: avise via send antes de ficar idle.
+
+Comandos auxiliares disponiveis (todos pre-aprovados, sem prompt):
+- `python -m termicanvas.cli whoami` — seu node_id
+- `python -m termicanvas.cli list` — lista agentes ativos
+- `python -m termicanvas.cli inbox` — mensagens pendentes pra voce
+- `python -m termicanvas.cli status <msg_id>` — checa entrega
+"""
+
+
+def build_spawned_manifest(role_md):
+    """Monta o conteudo final do manifesto de um agente spawnado: marker +
+    role customizado pelo orquestrador + instrucoes padrao de resposta."""
+    role_clean = (role_md or "").lstrip("﻿").strip()
+    if not role_clean:
+        role_clean = "# Agente\n\nRespostas diretas, em pt-BR."
+    return (
+        f"{TERMICANVAS_MARKER}\n\n"
+        f"{role_clean}\n\n"
+        f"---\n\n"
+        f"{spawn_response_instructions()}\n"
+    )
+
+
 def _orchestrator_prompt():
     """System prompt completo de orquestracao. Apendido ao manifesto quando o
     user promove o agente. Bloco e demarcado pelos markers ORCHESTRATOR_BEGIN
@@ -277,6 +323,25 @@ recebem o role_md (PowerShell/CMD ignora).
 Agentes que voce spawnar (e voce mesmo, se foi promovido a orquestrador) ja
 recebem `.claude/settings.local.json` com permissao automatica pra rodar
 qualquer comando `python -m termicanvas.cli ...` — sem prompts.
+
+### O role.md que voce escreve para um agente spawnado
+
+Voce nao precisa instruir o agente sobre **como** responder via bus, nem
+mencionar comandos da CLI — todo manifesto spawnado recebe automaticamente
+um bloco "Como responder mensagens" no final, dizendo:
+
+- Que nao ha humano lendo o terminal — comunicacao eh maquina-a-maquina
+- Que respostas vao via `python -m termicanvas.cli send <node_id> "..."`
+- Que apos enviar, deve ficar idle silenciosamente (sem escrever resumo no PTY)
+- Que respostas devem ser prefixadas com `[<papel>]`
+
+**Foque o role.md no papel e nas regras de negocio do agente.** Ex:
+- Stack/conhecimentos
+- Regras de seguranca (autorizacao explicita, gate MCP, etc)
+- Tom/idioma
+- Templates ou referencias do projeto
+
+A "etiqueta de comunicacao" o sistema injeta sozinho.
 
 ### Fluxo de orquestracao recomendado
 

@@ -326,17 +326,19 @@ class MainWindow(QMainWindow):
         if kind in ("claude", "gemini") and role_md:
             from termicanvas.agents import (
                 AGENT_KINDS,
-                TERMICANVAS_MARKER,
+                build_spawned_manifest,
                 install_termicanvas_permissions,
             )
             manifest_name = AGENT_KINDS[kind]["manifest"]
             manifest_path = agent_dir / manifest_name
-            # Remove BOM (﻿) que orquestrador pode ter incluido por
-            # acidente — alguns editores prepend BOM em arquivos UTF-8.
-            role_md_clean = role_md.lstrip("﻿").strip()
             try:
-                content = f"{TERMICANVAS_MARKER}\n\n{role_md_clean}\n"
-                manifest_path.write_text(content, encoding="utf-8")
+                # build_spawned_manifest apende automaticamente o bloco de
+                # instrucoes de resposta — agente fica maquina-a-maquina, sem
+                # escrever no PTY como se houvesse humano lendo.
+                manifest_path.write_text(
+                    build_spawned_manifest(role_md),
+                    encoding="utf-8",
+                )
             except Exception as e:
                 record_error("main.spawn.manifest", e)
             # Pre-aprova comandos do CLI pra orquestracao fluir sem prompts.
