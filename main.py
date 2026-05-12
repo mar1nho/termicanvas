@@ -65,6 +65,9 @@ class MainWindow(QMainWindow):
 
         self.canvas  = CanvasView()
         self.bus     = Bus()
+        # Spawn dinamico via /spawn — orquestrador cria novos agentes.
+        # Signal cross-thread (HTTP -> UI) com QueuedConnection automatica.
+        self.bus.spawn_requested.connect(self._on_spawn_requested)
         if self._bus_enabled:
             self.bus.start(self.canvas)
         self.canvas._bus_ref = self.bus
@@ -74,6 +77,7 @@ class MainWindow(QMainWindow):
 
         self.topbar = TopBar(parent=self.canvas)
         self.topbar.accent_changed.connect(self._on_accent_changed)
+        self.topbar.theme_toggled.connect(self._on_theme_toggled)
         self.sidebar.collapse_toggled.connect(
             lambda _: QTimer.singleShot(0, self._reposition_overlays)
         )
@@ -178,7 +182,11 @@ class MainWindow(QMainWindow):
                 agent_kind    = node.get("agent_kind")
                 role_name     = node.get("role_name")
                 manifest_mode = node.get("manifest_mode", "existing")
-                auto_reply    = node.get("auto_reply", False)
+                # Default agora e True para terminals com agent_kind (orquestrador
+                # e agentes spawnados); sessoes antigas que ja salvaram explicitamente
+                # False respeitam isso.
+                default_auto_reply = bool(agent_kind)
+                auto_reply    = node.get("auto_reply", default_auto_reply)
 
                 self._terminal_counter += 1
                 t = self._make_terminal(
@@ -242,7 +250,8 @@ class MainWindow(QMainWindow):
         scale    = cs.get("scale", 1.0)
         scroll_h = cs.get("scroll_h", 0)
         scroll_v = cs.get("scroll_v", 0)
-        accent   = cs.get("accent_color", ACCENT)
+        accent     = cs.get("accent_color", ACCENT)
+        light_mode = cs.get("light_mode", False)
 
         self.canvas.resetTransform()
         if abs(scale - 1.0) > 0.001:
@@ -255,6 +264,13 @@ class MainWindow(QMainWindow):
         self.topbar._accent_color = accent
         self.topbar._update_swatch()
         self._on_accent_changed(accent)
+
+        # Restaura o tema persistido (light/dark) — sempre propaga, mesmo
+        # quando False, para cobrir o caso "snapshot dark sobre sessao light".
+        self.topbar.set_light_mode(light_mode)
+        self.canvas.set_light_mode(light_mode)
+        self.sidebar.set_light_mode(light_mode)
+        self.island.set_light_mode(light_mode)
 
     # ---------- helpers ----------
 
@@ -269,6 +285,90 @@ class MainWindow(QMainWindow):
         for chip in self.sidebar.chips.values():
             chip.set_accent(color)
         self.canvas._nav.set_accent(color)
+
+    def _on_theme_toggled(self, light_mode: bool):
+        self.canvas.set_light_mode(light_mode)
+        self.sidebar.set_light_mode(light_mode)
+        self.island.set_light_mode(light_mode)
+        self._save_session_now()
+
+    def _on_spawn_requested(self, data):
+        """Handler do signal bus.spawn_requested — cria o terminal pedido por
+        um agente via `POST /spawn`. Roda no UI thread (signal e cross-thread
+        com QueuedConnection automatica)."""
+        import re
+        from pathlib import Path
+        from PyQt6.QtCore import QRectF
+        from termicanvas.node_factory import DEFAULT_SIZES
+
+        kind = data.get("kind", "")
+        name = (data.get("name") or "").strip()
+        role_md = data.get("role_md", "")
+        parent_cwd = (data.get("parent_cwd") or "").strip() or DEFAULT_CWD
+        from_id = data.get("from", "")
+
+        if not name:
+            return
+
+        # Slug do nome pra usar como nome de pasta seguro.
+        slug = re.sub(r"[^a-z0-9_-]+", "-", name.lower())
+        slug = re.sub(r"-+", "-", slug).strip("-_") or "agent"
+
+        # Pasta isolada em <parent>/.termicanvas/<slug>/
+        agent_dir = Path(parent_cwd) / ".termicanvas" / slug
+        try:
+            agent_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            record_error("main.spawn.mkdir", e)
+            return
+
+        # Escreve manifesto se for agente Claude/Gemini.
+        if kind in ("claude", "gemini") and role_md:
+            from termicanvas.agents import (
+                AGENT_KINDS,
+                TERMICANVAS_MARKER,
+                install_termicanvas_permissions,
+            )
+            manifest_name = AGENT_KINDS[kind]["manifest"]
+            manifest_path = agent_dir / manifest_name
+            # Remove BOM (﻿) que orquestrador pode ter incluido por
+            # acidente — alguns editores prepend BOM em arquivos UTF-8.
+            role_md_clean = role_md.lstrip("﻿").strip()
+            try:
+                content = f"{TERMICANVAS_MARKER}\n\n{role_md_clean}\n"
+                manifest_path.write_text(content, encoding="utf-8")
+            except Exception as e:
+                record_error("main.spawn.manifest", e)
+            # Pre-aprova comandos do CLI pra orquestracao fluir sem prompts.
+            try:
+                install_termicanvas_permissions(str(agent_dir), kind)
+            except Exception as e:
+                record_error("main.spawn.permissions", e)
+
+        # Calcula posicao abaixo do terminal que pediu o spawn (orquestrador).
+        # Se nao encontrar o frame de origem, deixa o canvas posicionar default.
+        geometry = None
+        src = self.bus._nodes.get(from_id) if from_id else None
+        if src and src.frame:
+            src_proxy = next(
+                (p for p, f in self.canvas.proxies if f is src.frame), None,
+            )
+            if src_proxy is not None:
+                pos = src_proxy.pos()
+                w, h = DEFAULT_SIZES.get(kind, (720, 460))
+                new_x = pos.x()
+                new_y = pos.y() + src.frame.height() + 40  # gap 40px
+                geometry = QRectF(new_x, new_y, w, h)
+
+        # Cria o terminal sem dialog, no cwd preparado, com o nome dado.
+        try:
+            self.factory.create(
+                kind, with_dialog=False,
+                cwd=str(agent_dir), name=name,
+                geometry=geometry,
+            )
+        except Exception as e:
+            record_error("main.spawn.factory", e)
 
     def _make_terminal(self, shell, cwd, agent_kind=None, role_name=None, manifest_mode="existing"):
         """Cria TerminalWidget com env_extra contendo URL do bus + node_id reservado."""
@@ -488,6 +588,7 @@ class MainWindow(QMainWindow):
             bus_enabled=self._bus_enabled,
             bus_toggle_warned=self._bus_toggle_warned,
             snapshot_load_warned=self._snapshot_load_warned,
+            light_mode=self.canvas.is_light_mode(),
         )
 
     # ---------- snapshots ----------
@@ -517,7 +618,11 @@ class MainWindow(QMainWindow):
             if ans != QMessageBox.StandardButton.Yes:
                 return
         try:
-            snapshots_mod.save_snapshot(name, self.canvas, self.topbar._accent_color)
+            snapshots_mod.save_snapshot(
+                name, self.canvas, self.topbar._accent_color,
+                bus_enabled=self._bus_enabled,
+                light_mode=self.canvas.is_light_mode(),
+            )
         except Exception as e:
             record_error("main.snapshots.save", e)
             QMessageBox.warning(self, "Snapshot", f"Falhou ao salvar: {e}")
@@ -578,7 +683,11 @@ class MainWindow(QMainWindow):
         if ans != QMessageBox.StandardButton.Yes:
             return
         try:
-            snapshots_mod.save_snapshot(display_name, self.canvas, self.topbar._accent_color)
+            snapshots_mod.save_snapshot(
+                display_name, self.canvas, self.topbar._accent_color,
+                bus_enabled=self._bus_enabled,
+                light_mode=self.canvas.is_light_mode(),
+            )
         except Exception as e:
             record_error("main.snapshots.overwrite", e)
             QMessageBox.warning(self, "Snapshot", f"Falhou ao sobrescrever: {e}")
@@ -606,21 +715,32 @@ class MainWindow(QMainWindow):
         try:
             snapshots_mod.save_snapshot(
                 f"auto {ts}", self.canvas, self.topbar._accent_color,
+                bus_enabled=self._bus_enabled,
+                light_mode=self.canvas.is_light_mode(),
             )
         except Exception as e:
             record_error("main.snapshots.auto_save", e)
 
     def _apply_snapshot(self, data: dict):
-        """Substitui o canvas atual pelo conteudo de um snapshot. Liga o bus se
-        precisar (snapshot tem nodes -> precisa bus para terminais funcionarem)."""
+        """Substitui o canvas atual pelo conteudo de um snapshot. Restaura
+        bus state e tema (dark/light) exatamente como estavam quando salvo."""
+        cs = data.get("canvas", {})
+        # Fallback p/ snapshots antigos sem bus_enabled: liga se houver nodes.
+        target_bus = cs.get("bus_enabled", bool(data.get("nodes")))
+
         # 1. Limpa canvas atual
         self.canvas.clear_all(bus=self.bus)
-        # 2. Liga bus se houver nodes pra carregar e ele estiver desligado
-        if data.get("nodes") and not self._bus_enabled:
+
+        # 2. Ajusta bus state para casar com o snapshot
+        if target_bus and not self._bus_enabled:
             self._enable_bus()
-        # 3. Aplica o conteudo do snapshot
+        elif not target_bus and self._bus_enabled:
+            self._disable_bus()
+
+        # 3. Aplica o conteudo do snapshot (nodes + viewport + tema)
         self._load_session_nodes(data)
         self._apply_session_viewport(data)
+
         # 4. Persiste o estado novo
         self._save_session_now()
         self._refresh_snapshots_sidebar()
