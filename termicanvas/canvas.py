@@ -86,6 +86,10 @@ class CanvasView(QGraphicsView):
         # como catenaria (linha curva afundando por gravidade) ligando o
         # bottom-center do pai ao top-center do filho.
         self.chains       = []   # [(parent_frame, child_frame), ...]
+        # Modo de criar chain manualmente — ativado pelo botao no header.
+        self._chaining     = False
+        self._chain_source = None
+        self._chain_mouse  = QPointF(0, 0)
 
         # Per-drag virtual position/size state — keeps the unsnapped target
         # so the cursor can accumulate sub-grid motion without the node
@@ -223,6 +227,30 @@ class CanvasView(QGraphicsView):
         self.chains.append((parent_frame, child_frame))
         self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
 
+    def start_chain(self, frame):
+        """Entra em modo de criacao manual de chain. O proximo clique em outro
+        frame cria a corrente. Esc cancela."""
+        self._chaining = True
+        self._chain_source = frame
+        self._chain_mouse = QPointF(0, 0)
+        self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+
+    def finish_chain(self, target_frame):
+        if self._chain_source is None or target_frame is None:
+            self.cancel_chain()
+            return
+        if target_frame is self._chain_source:
+            self.cancel_chain()
+            return
+        self.add_chain(self._chain_source, target_frame)
+        self.cancel_chain()
+
+    def cancel_chain(self):
+        self._chaining = False
+        self._chain_source = None
+        self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+        self._scene.update()
+
     def _draw_chain(self, painter, parent_proxy, parent_frame, child_proxy, child_frame):
         """Desenha 1 chain como catenaria — curva cubica com sag proporcional
         a distancia entre pontos, simulando uma corrente pendurada."""
@@ -272,6 +300,30 @@ class CanvasView(QGraphicsView):
             if parent_proxy is None or child_proxy is None:
                 continue
             self._draw_chain(painter, parent_proxy, parent_frame, child_proxy, child_frame)
+
+        # Rubber-band durante modo de chain manual: catenaria tracejada do
+        # bottom do source ate o cursor.
+        if self._chaining and self._chain_source is not None:
+            src_proxy = next((p for p, f in self.proxies if f is self._chain_source), None)
+            if src_proxy is not None:
+                from math import hypot
+                p1 = QPointF(
+                    src_proxy.pos().x() + self._chain_source.width() / 2,
+                    src_proxy.pos().y() + self._chain_source.height(),
+                )
+                p2 = self._chain_mouse
+                dist = hypot(p2.x() - p1.x(), p2.y() - p1.y())
+                sag  = 30 + dist * 0.18
+                bottom_y = max(p1.y(), p2.y()) + sag
+                path = QPainterPath(p1)
+                path.cubicTo(QPointF(p1.x(), bottom_y), QPointF(p2.x(), bottom_y), p2)
+                line_color = QColor(80, 80, 80, 200) if self._light_mode else QColor(180, 180, 180, 180)
+                pen = QPen(line_color, 2.2)
+                pen.setStyle(Qt.PenStyle.DashLine)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(path)
 
         # conexões estabelecidas
         for src_frame, tgt_frame in self.connections:
@@ -620,6 +672,21 @@ class CanvasView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
 
+            # modo chain: clique em qualquer NodeFrame finaliza a chain
+            if self._chaining:
+                item = self.itemAt(event.position().toPoint())
+                target_frame = None
+                if isinstance(item, QGraphicsProxyWidget):
+                    widget = item.widget()
+                    if isinstance(widget, NodeFrame):
+                        target_frame = widget
+                if target_frame is not None:
+                    self.finish_chain(target_frame)
+                else:
+                    self.cancel_chain()
+                event.accept()
+                return
+
             # modo conexão: procura porta de entrada num sink (agent/terminal)
             if self._connecting:
                 for proxy, frame in self._sink_proxies():
@@ -670,6 +737,9 @@ class CanvasView(QGraphicsView):
         if self._connecting:
             self._conn_mouse = self.mapToScene(event.position().toPoint())
             self._scene.update()
+        if self._chaining:
+            self._chain_mouse = self.mapToScene(event.position().toPoint())
+            self._scene.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -706,6 +776,9 @@ class CanvasView(QGraphicsView):
         if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
             if self._connecting:
                 self.cancel_connection()
+                return True
+            if self._chaining:
+                self.cancel_chain()
                 return True
         if et == QEvent.Type.KeyPress:
             mods = event.modifiers()

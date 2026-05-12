@@ -86,6 +86,15 @@ SVG_PATHS = {
         '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>'
         '</svg>'
     ),
+    # Link — corrente de dois elos (usada pra criar chain entre agentes)
+    "link": (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+        'fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
+        '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'
+        '</svg>'
+    ),
     "plus": (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
         'fill="none" stroke="currentColor" stroke-width="2" '

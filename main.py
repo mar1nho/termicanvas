@@ -434,6 +434,12 @@ class MainWindow(QMainWindow):
         frame.header.show_auto_reply_btn()
         frame.header.set_auto_reply_state(terminal.auto_reply)
         frame.header.auto_reply_toggled.connect(terminal.set_auto_reply)
+        # Botao de chain manual — agente entra em modo "criar corrente" e o
+        # proximo node clicado vira filho.
+        frame.header.show_chain_btn()
+        frame.header.chain_clicked.connect(
+            lambda f=frame: self.canvas.start_chain(f)
+        )
 
     def _open_role_editor(self, terminal):
         if not terminal.cwd or not terminal.agent_kind:

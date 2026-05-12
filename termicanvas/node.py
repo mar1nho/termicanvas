@@ -71,8 +71,9 @@ class NodeHeader(QWidget):
     icon_changed    = pyqtSignal(str)
     font_up_clicked   = pyqtSignal()
     font_down_clicked = pyqtSignal()
-    edit_role_clicked = pyqtSignal()
+    edit_role_clicked  = pyqtSignal()
     auto_reply_toggled = pyqtSignal(bool)
+    chain_clicked      = pyqtSignal()
 
     def __init__(self, title, icon=""):
         super().__init__()
@@ -159,6 +160,23 @@ class NodeHeader(QWidget):
         self.auto_reply_btn.hide()
         layout.addWidget(self.auto_reply_btn)
 
+        self.chain_btn = QPushButton()
+        self.chain_btn.setIcon(get_icon("link", color=TEXT_MUTED, size=14))
+        self.chain_btn.setIconSize(QSize(14, 14))
+        self.chain_btn.setFixedSize(22, 22)
+        self.chain_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chain_btn.setToolTip("Linkar uma corrente a outro terminal — clique aqui, depois no alvo")
+        self.chain_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none; padding: 0;
+            }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; border-radius: 2px; }}
+        """)
+        self.chain_btn.clicked.connect(self.chain_clicked.emit)
+        self.chain_btn.hide()
+        layout.addWidget(self.chain_btn)
+
         self.close_btn = QPushButton()
         self.close_btn.setIcon(get_icon("close", color=TEXT_SECONDARY, size=14))
         self.close_btn.setIconSize(QSize(14, 14))
@@ -198,6 +216,9 @@ class NodeHeader(QWidget):
 
     def show_auto_reply_btn(self):
         self.auto_reply_btn.show()
+
+    def show_chain_btn(self):
+        self.chain_btn.show()
 
     def set_auto_reply_state(self, enabled):
         # Bloqueia signal pra nao re-emitir ao restaurar de session
