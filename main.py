@@ -327,8 +327,9 @@ class MainWindow(QMainWindow):
             record_error("main.spawn.mkdir", e)
             return
 
-        # Escreve manifesto se for agente Claude/Gemini.
-        if kind in ("claude", "gemini") and role_md:
+        # Escreve manifesto se for agente Claude/Gemini. SEMPRE escreve, mesmo
+        # sem role_md — o default rico em build_spawned_manifest cobre.
+        if kind in ("claude", "gemini"):
             from termicanvas.agents import (
                 AGENT_KINDS,
                 build_spawned_manifest,
@@ -337,11 +338,12 @@ class MainWindow(QMainWindow):
             manifest_name = AGENT_KINDS[kind]["manifest"]
             manifest_path = agent_dir / manifest_name
             try:
-                # build_spawned_manifest apende automaticamente o bloco de
+                # build_spawned_manifest gera default rico baseado no nome se
+                # role_md vier vazio, e apende automaticamente o bloco de
                 # instrucoes de resposta — agente fica maquina-a-maquina, sem
                 # escrever no PTY como se houvesse humano lendo.
                 manifest_path.write_text(
-                    build_spawned_manifest(role_md),
+                    build_spawned_manifest(role_md, agent_name=name),
                     encoding="utf-8",
                 )
             except Exception as e:

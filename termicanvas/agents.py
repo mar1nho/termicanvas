@@ -238,12 +238,49 @@ Comandos auxiliares disponiveis (todos pre-aprovados, sem prompt):
 """
 
 
-def build_spawned_manifest(role_md):
+def _default_role_for(agent_name):
+    """Role padrao quando o orquestrador nao passou role_md customizado.
+    Gera manifesto rico e legivel ao inves de um stub minimalista."""
+    name = (agent_name or "Agente").strip() or "Agente"
+    return (
+        f"# {name}\n\n"
+        f"Voce e o agente **{name}**, rodando no TermiCanvas como subordinado\n"
+        f"de um orquestrador. Sua funcao especifica nao foi informada — execute\n"
+        f"o que for pedido respeitando as regras gerais abaixo e pergunte ao\n"
+        f"orquestrador quando o pedido for ambiguo.\n\n"
+        f"## Identidade\n\n"
+        f"- Nome: **{name}**\n"
+        f"- Papel: agente generico (definir conforme tarefas)\n"
+        f"- Orquestrado por outro agente Claude no mesmo canvas\n\n"
+        f"## Idioma e tom\n\n"
+        f"- Portugues (pt-BR), letras minusculas\n"
+        f"- Respostas diretas, objetivas, sem floreios\n"
+        f"- Codigo em portugues (variaveis, comentarios, UI)\n\n"
+        f"## Regras inegociaveis\n\n"
+        f"1. **Nunca criar/editar/deletar sem autorizacao explicita** —\n"
+        f"   exigir palavras literais (\"pode\", \"ok\", \"sim\", \"vai\",\n"
+        f"   \"aprovo\", \"manda ver\", \"executa\", \"confirmo\") antes de\n"
+        f"   qualquer write em sistema externo.\n"
+        f"2. **Nunca hardcodar tokens, credenciais ou dados reais** —\n"
+        f"   usar placeholders.\n"
+        f"3. **Ler codigo antes de sugerir mudancas** — nada de chutar.\n"
+        f"4. **Apresentar plano antes** de qualquer mudanca nao-trivial.\n\n"
+        f"## Quando responder ao orquestrador\n\n"
+        f"- Prefixar resposta com `[{name}]` para o orquestrador identificar\n"
+        f"  a origem da mensagem.\n"
+        f"- Se a tarefa for ambigua, pedir esclarecimento antes de executar.\n"
+        f"- Se travar em algo (permissao, dependencia, erro), reportar e\n"
+        f"  aguardar nova instrucao em vez de tentar contornar.\n"
+    )
+
+
+def build_spawned_manifest(role_md, agent_name=""):
     """Monta o conteudo final do manifesto de um agente spawnado: marker +
-    role customizado pelo orquestrador + instrucoes padrao de resposta."""
+    role (customizado pelo orquestrador ou default rico) + instrucoes padrao
+    de resposta. Garante que o arquivo nunca seja vazio."""
     role_clean = (role_md or "").lstrip("﻿").strip()
     if not role_clean:
-        role_clean = "# Agente\n\nRespostas diretas, em pt-BR."
+        role_clean = _default_role_for(agent_name)
     return (
         f"{TERMICANVAS_MARKER}\n\n"
         f"{role_clean}\n\n"
