@@ -1,88 +1,44 @@
-"""TopBar — barra superior com brand, botoes de adicionar e accent picker.
+"""TopBar: bus toggle and accent picker."""
 
-A lista de terminais abertos esta em TerminalsSidebar (sidebar.py).
-"""
-
-from PyQt6.QtCore import (
-    QEasingCurve, QPropertyAnimation, QSize, Qt,
-    pyqtProperty, pyqtSignal,
-)
+from PyQt6.QtCore import QByteArray, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import (
-    QColorDialog,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QWidget,
-)
+from PyQt6.QtSvg import QSvgRenderer
+from PyQt6.QtWidgets import QColorDialog, QHBoxLayout, QPushButton, QWidget
 
-from .icons import get_icon
-from .tokens import (
-    ACCENT,
-    BG_ELEVATED,
-    BG_SIDEBAR,
-    BG_SURFACE,
-    BORDER,
-    BORDER_HOVER,
-    DANGER,
-    SUCCESS,
-    TEXT_MUTED,
-    TEXT_PRIMARY,
-    TEXT_SECONDARY,
-)
+from .tokens import ACCENT, BORDER_HOVER, TEXT_PRIMARY
+
+
+_BUS_OFF_SVG = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496.158 496.158"><path style="fill:#EB9783;" d="M496.158,248.085c0-137.021-111.07-248.082-248.076-248.082C111.07,0.003,0,111.063,0,248.085 c0,137.002,111.07,248.07,248.082,248.07C385.088,496.155,496.158,385.087,496.158,248.085z"/><path style="fill:#D63232;" d="M373.299,154.891c-19.558-26.212-47.401-46.023-78.401-55.787c-0.759-0.238-1.588-0.103-2.229,0.369c-0.643,0.471-1.021,1.22-1.021,2.016l0.16,40.256c0,1.074,0.514,2.06,1.332,2.562c31.732,19.456,66.504,47,66.504,103.237c0,61.515-50.047,111.56-111.562,111.56c-61.517,0-111.566-50.045-111.566-111.56c0-58.737,35.199-84.661,67.615-103.917c0.836-0.496,1.363-1.492,1.363-2.58l0.154-39.909c0-0.793-0.375-1.539-1.013-2.01c-0.638-0.472-1.46-0.611-2.219-0.381c-31.283,9.586-59.41,29.357-79.202,55.672c-20.467,27.215-31.285,59.603-31.285,93.662c0,86.099,70.049,156.146,156.152,156.146c86.1,0,156.147-70.047,156.147-156.146C404.228,214.235,393.533,182.01,373.299,154.891z"/><path style="fill:#D63232;" d="M251.851,67.009h-7.549c-11.788,0-21.378,9.59-21.378,21.377v181.189c0,11.787,9.59,21.377,21.378,21.377h7.549c11.788,0,21.378-9.59,21.378-21.377V88.386C273.229,76.599,263.64,67.009,251.851,67.009z"/></svg>'''
+
+_BUS_ON_SVG = b'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496.158 496.158"><path style="fill:#89ec8f;" d="M496.158,248.085c0-137.021-111.07-248.082-248.076-248.082C111.07,0.003,0,111.063,0,248.085 c0,137.002,111.07,248.07,248.082,248.07C385.088,496.155,496.158,385.087,496.158,248.085z"/><path style="fill:#46d733;" d="M373.299,154.891c-19.558-26.212-47.401-46.023-78.401-55.787c-0.759-0.238-1.588-0.103-2.229,0.369c-0.643,0.471-1.021,1.22-1.021,2.016l0.16,40.256c0,1.074,0.514,2.06,1.332,2.562c31.732,19.456,66.504,47,66.504,103.237c0,61.515-50.047,111.56-111.562,111.56c-61.517,0-111.566-50.045-111.566-111.56c0-58.737,35.199-84.661,67.615-103.917c0.836-0.496,1.363-1.492,1.363-2.58l0.154-39.909c0-0.793-0.375-1.539-1.013-2.01c-0.638-0.472-1.46-0.611-2.219-0.381c-31.283,9.586-59.41,29.357-79.202,55.672c-20.467,27.215-31.285,59.603-31.285,93.662c0,86.099,70.049,156.146,156.152,156.146c86.1,0,156.147-70.047,156.147-156.146C404.228,214.235,393.533,182.01,373.299,154.891z"/><path style="fill:#46d733;" d="M251.851,67.009h-7.549c-11.788,0-21.378,9.59-21.378,21.377v181.189c0,11.787,9.59,21.377,21.378,21.377h7.549c11.788,0,21.378-9.59,21.378-21.377V88.386C273.229,76.599,263.64,67.009,251.851,67.009z"/></svg>'''
 
 
 class BusToggleButton(QWidget):
-    """Bolinha verde (ON) / vermelha pulsante (OFF) para o toggle do bus."""
+    """SVG ON/OFF bus toggle."""
 
-    clicked = pyqtSignal(bool)  # carries the new requested state (inverse of current)
+    clicked = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(24, 24)
+        self.setFixedSize(22, 22)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._state = True
-        self._glow = 0.0
-
-        self._anim = QPropertyAnimation(self, b"glow_intensity", self)
-        self._anim.setDuration(3000)
-        self._anim.setStartValue(0.0)
-        self._anim.setKeyValueAt(0.5, 1.0)
-        self._anim.setEndValue(0.0)
-        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-        self._anim.setLoopCount(-1)
+        self._on_renderer = QSvgRenderer(QByteArray(_BUS_ON_SVG), self)
+        self._off_renderer = QSvgRenderer(QByteArray(_BUS_OFF_SVG), self)
 
         self._refresh_tooltip()
 
-    # -- glow animated property --
-    def _get_glow(self):
-        return self._glow
-
-    def _set_glow(self, value):
-        self._glow = float(value)
-        self.update()
-
-    glow_intensity = pyqtProperty(float, fget=_get_glow, fset=_set_glow)
-
-    # -- public API --
     def set_state(self, enabled: bool):
         self._state = bool(enabled)
         self._refresh_tooltip()
-        if self._state:
-            self._anim.stop()
-            self._glow = 0.0
-        else:
-            self._anim.start()
         self.update()
 
-    # -- internals --
     def _refresh_tooltip(self):
         if self._state:
-            self.setToolTip("Bus ligado · clique pra desligar")
+            self.setToolTip("Bus ligado - clique pra desligar")
         else:
-            self.setToolTip("Bus desligado · clique pra ligar")
+            self.setToolTip("Bus desligado - clique pra ligar")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -92,124 +48,33 @@ class BusToggleButton(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        cx, cy, r = 12, 12, 7
-        if self._state:
-            color = QColor(SUCCESS)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(color)
-            p.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
-        else:
-            base = QColor(DANGER)
-            # outer ring (faint)
-            outer = QColor(base)
-            outer.setAlphaF(0.12 + 0.18 * self._glow)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(outer)
-            p.drawEllipse(cx - 12, cy - 12, 24, 24)
-            # inner ring
-            mid = QColor(base)
-            mid.setAlphaF(0.30 + 0.30 * self._glow)
-            p.setBrush(mid)
-            p.drawEllipse(cx - 10, cy - 10, 20, 20)
-            # solid core
-            p.setBrush(base)
-            p.drawEllipse(cx - r, cy - r, 2 * r, 2 * r)
+        renderer = self._on_renderer if self._state else self._off_renderer
+        renderer.render(p, QRectF(self.rect()).adjusted(1, 1, -1, -1))
         p.end()
 
 
 class TopBar(QWidget):
-    add_terminal       = pyqtSignal(str)
-    add_agent_terminal = pyqtSignal(str)
-    add_note           = pyqtSignal()
-    add_agent          = pyqtSignal()
-    add_prompt         = pyqtSignal()
-    add_debug          = pyqtSignal()
-    accent_changed     = pyqtSignal(str)
-    toggle_sidebar     = pyqtSignal()
-    bus_toggled        = pyqtSignal(bool)
+    accent_changed = pyqtSignal(str)
+    bus_toggled = pyqtSignal(bool)
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._accent_color = ACCENT
         self.setObjectName("topbar")
-        self.setFixedHeight(52)
-        self.setStyleSheet(f"""
-            #topbar {{
-                background: {BG_SIDEBAR};
-                border-bottom: 1px solid {BORDER};
-            }}
-        """)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(56, 28)
+        self.setStyleSheet("#topbar { background: transparent; border: none; }")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 16, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(0, 3, 0, 3)
+        layout.setSpacing(8)
 
         self._bus_button = BusToggleButton()
         self._bus_button.clicked.connect(self.bus_toggled.emit)
         layout.addWidget(self._bus_button)
-        layout.addSpacing(8)
-
-        # toggle da sidebar (sempre visivel — nao some quando sidebar colapsa)
-        self._sidebar_toggle = QPushButton()
-        self._sidebar_toggle.setIcon(get_icon("menu", color=TEXT_SECONDARY, size=16))
-        self._sidebar_toggle.setIconSize(QSize(16, 16))
-        self._sidebar_toggle.setFixedSize(32, 32)
-        self._sidebar_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._sidebar_toggle.setToolTip("Mostrar/ocultar lista de terminais")
-        self._sidebar_toggle.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: 1px solid {BORDER}; border-radius: 2px;
-                padding: 0;
-            }}
-            QPushButton:hover {{
-                border-color: {BORDER_HOVER};
-                background: {BG_ELEVATED};
-            }}
-        """)
-        self._sidebar_toggle.clicked.connect(self.toggle_sidebar.emit)
-        layout.addWidget(self._sidebar_toggle)
-        layout.addSpacing(12)
-
-        brand = QLabel("TERMICANVAS")
-        brand.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-size: 11pt; font-weight: 600;
-            letter-spacing: 2px; background: transparent;
-        """)
-        layout.addWidget(brand)
-
-        layout.addSpacing(20)
-        layout.addWidget(self._vline())
-        layout.addSpacing(12)
-
-        for label, slot in [
-            ("PowerShell", lambda: self.add_terminal.emit("powershell.exe")),
-            ("CMD",        lambda: self.add_terminal.emit("cmd.exe")),
-            ("Claude",     lambda: self.add_agent_terminal.emit("claude")),
-            ("Gemini",     lambda: self.add_agent_terminal.emit("gemini")),
-            ("Nota",       self.add_note.emit),
-            ("Prompt",     self.add_prompt.emit),
-            ("Agent",      self.add_agent.emit),
-            ("Debug",      self.add_debug.emit),
-        ]:
-            b = self._add_btn(label)
-            b.clicked.connect(slot)
-            layout.addWidget(b)
-            layout.addSpacing(4)
-
-        layout.addStretch(1)
-
-        layout.addWidget(self._vline())
-        layout.addSpacing(12)
-
-        accent_lbl = QLabel("Cor ativa")
-        accent_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8.5pt; background: transparent;")
-        layout.addWidget(accent_lbl)
-        layout.addSpacing(6)
 
         self._accent_swatch = QPushButton()
-        self._accent_swatch.setFixedSize(20, 20)
+        self._accent_swatch.setFixedSize(16, 16)
         self._accent_swatch.setCursor(Qt.CursorShape.PointingHandCursor)
         self._accent_swatch.setToolTip("Mudar cor ativa global")
         self._accent_swatch.clicked.connect(self._pick_accent)
@@ -232,31 +97,6 @@ class TopBar(QWidget):
             self._accent_color = color.name()
             self._update_swatch()
             self.accent_changed.emit(self._accent_color)
-
-    def _vline(self):
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFixedSize(1, 24)
-        sep.setStyleSheet(f"background: {BORDER}; border: none;")
-        return sep
-
-    def _add_btn(self, text):
-        b = QPushButton(text)
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.setFixedHeight(32)
-        b.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 6px;
-                padding: 0 12px; font-size: 9.5pt;
-            }}
-            QPushButton:hover {{
-                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
-                border-color: {BORDER_HOVER};
-            }}
-            QPushButton:pressed {{ background: {BG_SURFACE}; }}
-        """)
-        return b
 
     def set_bus_state(self, enabled: bool):
         self._bus_button.set_state(enabled)
