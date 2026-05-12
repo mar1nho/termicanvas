@@ -100,6 +100,7 @@ class TerminalLaunchDialog(QDialog):
         # Se nao existe -> oferece checkbox "criar role gerenciado" + combo.
         self.role_combo            = None
         self._create_role_check    = None
+        self._orchestrator_check   = None
         self._manifest_status      = None
         self._manifest_detected    = False  # atualizado em _refresh_manifest_status()
         if is_agent:
@@ -135,6 +136,26 @@ class TerminalLaunchDialog(QDialog):
 
             self._create_role_check.toggled.connect(self._on_create_role_toggled)
             # estado inicial e definido apos _set_path inicial via _refresh_manifest_status
+
+            # Checkbox de orquestrador — apende um system prompt ao manifesto
+            # com instrucoes pra coordenar outros agentes via bus.
+            # Independente do checkbox de role (funciona ate com CLAUDE.md ja
+            # existente, porque so apende um bloco marcado no final).
+            self._orchestrator_check = QCheckBox(
+                "Promover a Orquestrador (apende prompt de coordenacao no manifesto)"
+            )
+            self._orchestrator_check.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {TEXT_PRIMARY}; font-size: 9.5pt;
+                    spacing: 8px; background: transparent;
+                }}
+                QCheckBox::indicator {{ width: 14px; height: 14px; }}
+            """)
+            self._orchestrator_check.setToolTip(
+                "Adiciona ao final do CLAUDE.md/GEMINI.md instrucoes sobre como "
+                "listar agentes, enviar mensagens, broadcast e consultar inbox."
+            )
+            layout.addWidget(self._orchestrator_check)
 
         layout.addSpacing(4)
         layout.addWidget(self._caption("Diretorio de trabalho:"))
@@ -314,6 +335,10 @@ class TerminalLaunchDialog(QDialog):
 
     def chosen_icon(self):
         return self.icon_input.text().strip()
+
+    def chosen_orchestrator(self):
+        """True se o usuario marcou pra promover a orquestrador."""
+        return bool(self._orchestrator_check and self._orchestrator_check.isChecked())
 
     def chosen_role(self):
         # Role so e usado quando manifest_mode == "managed"
