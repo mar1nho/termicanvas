@@ -13,6 +13,39 @@ from PyQt6.QtWidgets import (
 )
 
 from .icons import get_icon
+
+
+def _icon_for_inner(inner) -> str:
+    """Mapeia o widget interno -> nome do icone SVG em icons.py.
+    Mesma logica do _icon_for_widget da sidebar, duplicada aqui pra evitar
+    import circular sidebar <-> node."""
+    # Imports locais pra nao ciclar.
+    from .agent import AgentWidget
+    from .terminal import TerminalWidget
+    from .widgets import NoteWidget, PromptCard
+
+    if isinstance(inner, TerminalWidget):
+        kind = inner.agent_kind
+        if kind == "claude":
+            return "agent_claude"
+        if kind == "gemini":
+            return "agent_gemini"
+        if (inner.shell or "").lower().startswith("cmd"):
+            return "terminal_cmd"
+        return "terminal_ps"
+    if isinstance(inner, NoteWidget):
+        return "edit"
+    if isinstance(inner, PromptCard):
+        return "clipboard"
+    if isinstance(inner, AgentWidget):
+        return "agent_code"
+    try:
+        from .monitor import DebugMonitorWidget
+        if isinstance(inner, DebugMonitorWidget):
+            return "bug"
+    except Exception:
+        pass
+    return "box"
 from .tokens import (
     ACCENT,
     BG_ELEVATED,
@@ -58,15 +91,13 @@ class NodeHeader(QWidget):
         layout.addWidget(self.dot)
         self._refresh_dot()
 
-        self.icon = EditableLabel(icon)
-        self.icon.set_label_style(
-            f"QLabel {{ color: {TEXT_PRIMARY}; font-family: 'Segoe UI';"
-            f"font-size: 11pt; background: transparent; padding: 0px; }}"
-        )
-        self.icon.setFixedWidth(28 if icon else 0)
-        if not icon:
-            self.icon.setHidden(True)
-        self.icon.text_changed.connect(self._on_icon_changed)
+        # Icone do tipo (SVG) — preenchido depois via set_type_icon pelo NodeFrame.
+        # Comeca oculto; se nao houver tipo conhecido, fica zero-width.
+        self._type_icon_name = ""
+        self.icon = QLabel()
+        self.icon.setFixedSize(18, 18)
+        self.icon.setStyleSheet("background: transparent;")
+        self.icon.setHidden(True)
         layout.addWidget(self.icon)
 
         self.title = EditableLabel(title)
@@ -141,20 +172,22 @@ class NodeHeader(QWidget):
         self.close_btn.clicked.connect(self.close_clicked.emit)
         layout.addWidget(self.close_btn)
 
-    def _on_icon_changed(self, text):
-        # limita a 4 chars
-        text = (text or "")[:4]
-        if text != self.icon.text():
-            self.icon.setText(text)
-        self.icon.setFixedWidth(28 if text else 0)
-        self.icon.setHidden(not text)
-        self.icon_changed.emit(text)
+    def set_type_icon(self, icon_name: str, light_mode: bool = False):
+        """Define o icone SVG do tipo (PowerShell/Claude/etc). Sobrescreve
+        qualquer setIcon legado. light_mode controla a cor (escuro em fundo
+        claro, claro em fundo escuro)."""
+        self._type_icon_name = icon_name or ""
+        if not icon_name:
+            self.icon.setHidden(True)
+            return
+        color = TEXT_SECONDARY if not light_mode else "#3a3a3a"
+        self.icon.setPixmap(get_icon(icon_name, color=color, size=16).pixmap(16, 16))
+        self.icon.setHidden(False)
 
     def set_icon(self, text):
-        text = (text or "")[:4]
-        self.icon.setText(text)
-        self.icon.setFixedWidth(28 if text else 0)
-        self.icon.setHidden(not text)
+        # Stub mantido pra compat com session restore (campo "icon" string
+        # legado); ignorado porque agora usamos SVG do tipo do widget.
+        pass
 
     def show_font_controls(self):
         self.font_down_btn.show()
@@ -304,6 +337,7 @@ class NodeFrame(QFrame):
         super().__init__()
         self.inner         = inner
         self._focused      = False
+        self._light_mode   = False
         self._node_color   = ACCENT  # sobrescrito por canvas.add_node com a accent global
         self.setObjectName("node")
         self.setMinimumSize(260, 180)
@@ -313,6 +347,9 @@ class NodeFrame(QFrame):
         main.setSpacing(0)
 
         self.header = NodeHeader(title, icon=icon)
+        # Aplica o icone SVG do tipo (PowerShell/Claude/Note/etc) baseado no
+        # widget interno. Substitui o slot de emoji/texto que existia antes.
+        self.header.set_type_icon(_icon_for_inner(inner), light_mode=self._light_mode)
         main.addWidget(self.header)
 
         self.body = QWidget()
@@ -348,7 +385,14 @@ class NodeFrame(QFrame):
         self.header.set_focused(focused)
 
     def icon_text(self):
-        return self.header.icon.text()
+        # Compat com session.py: o icone agora vem do tipo do widget (SVG),
+        # nao mais de um campo de texto editavel.
+        return ""
+
+    def set_light_mode(self, enabled: bool):
+        """Atualiza icone do tipo conforme tema (cor adaptada)."""
+        self._light_mode = bool(enabled)
+        self.header.set_type_icon(self.header._type_icon_name, light_mode=self._light_mode)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

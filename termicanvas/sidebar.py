@@ -1,15 +1,16 @@
 """TerminalsSidebar — lista vertical de terminais abertos + secao de snapshots.
 
 Layout:
-- Header "TERMINAIS" (estatico)
-- Lista de terminal chips
-- Header "SNAPSHOTS" + botao "+"
-- Lista de snapshot chips com menu de 3 pontinhos (renomear/sobrescrever/deletar)
+- Top bar: toggle « pra recolher
+- Section "TERMINAIS" colapsavel (chevron) com SidebarChip pra cada terminal
+- Section "SNAPSHOTS" colapsavel (chevron + botao "+") com SnapshotChip
+- Cantos direitos arredondados, adapta tema dark<->light via set_light_mode()
 """
 
 from datetime import datetime
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPalette
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -39,6 +40,73 @@ from .tokens import (
 )
 
 
+# Paletas dark/light usadas pelos componentes da sidebar. Mantidas locais para
+# nao poluir os tokens globais (que descrevem o tema base do app, sempre dark).
+_DARK_PALETTE = {
+    "bg":             BG_SIDEBAR,
+    "elevated":       BG_ELEVATED,
+    "surface":        BG_SURFACE,
+    "border":         BORDER,
+    "border_hover":   BORDER_HOVER,
+    "text_primary":   TEXT_PRIMARY,
+    "text_secondary": TEXT_SECONDARY,
+    "text_muted":     TEXT_MUTED,
+    "hover":          "rgba(255, 255, 255, 0.04)",
+    "section_hover":  "rgba(255, 255, 255, 0.03)",
+}
+
+_LIGHT_PALETTE = {
+    "bg":             "#f5f5f5",
+    "elevated":       "#e6e6e6",
+    "surface":        "#ffffff",
+    "border":         "#d4d4d4",
+    "border_hover":   "#b0b0b0",
+    "text_primary":   "#1a1a1a",
+    "text_secondary": "#4a4a4a",
+    "text_muted":     "#8a8a8a",
+    "hover":          "rgba(0, 0, 0, 0.05)",
+    "section_hover":  "rgba(0, 0, 0, 0.03)",
+}
+
+
+def _palette(light_mode: bool) -> dict:
+    return _LIGHT_PALETTE if light_mode else _DARK_PALETTE
+
+
+# Mapeamento tipo de widget interno -> nome do icone em icons.py.
+# Resolvido em runtime via _icon_for_widget pra evitar imports circulares.
+def _icon_for_widget(inner) -> str:
+    """Retorna o nome do icone SVG correspondente ao tipo do widget interno."""
+    # Imports locais pra nao ciclar com modulos que importam sidebar.
+    from .agent import AgentWidget
+    from .widgets import NoteWidget, PromptCard
+
+    if isinstance(inner, TerminalWidget):
+        kind = inner.agent_kind
+        if kind == "claude":
+            return "agent_claude"
+        if kind == "gemini":
+            return "agent_gemini"
+        # PowerShell e CMD distinguem pelo shell binario.
+        if (inner.shell or "").lower().startswith("cmd"):
+            return "terminal_cmd"
+        return "terminal_ps"
+    if isinstance(inner, NoteWidget):
+        return "edit"
+    if isinstance(inner, PromptCard):
+        return "clipboard"
+    if isinstance(inner, AgentWidget):
+        return "agent_code"
+    # Debug Monitor importado tardiamente porque puxa psutil.
+    try:
+        from .monitor import DebugMonitorWidget
+        if isinstance(inner, DebugMonitorWidget):
+            return "bug"
+    except Exception:
+        pass
+    return "box"
+
+
 class SidebarChip(QFrame):
     """Chip vertical para a sidebar — mais alto, full-width."""
 
@@ -50,68 +118,117 @@ class SidebarChip(QFrame):
         self.frame         = frame
         self._accent_color = frame._node_color
         self._is_focused   = False
+        self._light_mode   = False
+        self._has_activity = False
         self.setObjectName("schip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(54)
-        self._apply_style(False)
+        self.setFixedHeight(52)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 10, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 8, 8, 8)
+        layout.setSpacing(10)
 
-        self.dot = QLabel("●")
-        self.dot.setStyleSheet(f"color: {SUCCESS}; font-size: 8pt; background: transparent;")
-        layout.addWidget(self.dot)
+        # Icone do tipo (PowerShell/CMD/Claude/Gemini/Note/Prompt/Agent/Debug)
+        self._type_icon_name = _icon_for_widget(frame.inner)
+        self.type_icon = QLabel()
+        self.type_icon.setFixedSize(15, 15)
+        self.type_icon.setStyleSheet("background: transparent;")
+        layout.addWidget(self.type_icon)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setSpacing(2)
+        text_col.setSpacing(1)
 
         self.name_label = QLabel(frame.header.title.text())
-        self.name_label.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: 'Segoe UI';
-            font-size: 9.5pt; font-weight: 500; background: transparent;
-        """)
-        self.name_label.setMaximumWidth(180)
+        self.name_label.setMaximumWidth(150)
         text_col.addWidget(self.name_label)
 
         self.cmd_label = QLabel("idle")
-        self.cmd_label.setStyleSheet(f"""
-            color: {TEXT_MUTED}; font-family: 'Cascadia Mono','Consolas',monospace;
-            font-size: 7.5pt; background: transparent;
-        """)
-        self.cmd_label.setMaximumWidth(180)
+        self.cmd_label.setMaximumWidth(150)
         text_col.addWidget(self.cmd_label)
 
         layout.addLayout(text_col, 1)
 
+        # Dot de status (idle/active) — fica a direita, antes do close
+        self.dot = QLabel("●")
+        layout.addWidget(self.dot)
+
         self.close_btn = QPushButton()
-        self.close_btn.setIcon(get_icon("close", color=TEXT_MUTED, size=12))
-        self.close_btn.setIconSize(QSize(12, 12))
-        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setIconSize(QSize(11, 11))
+        self.close_btn.setFixedSize(18, 18)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent;
-                          border: none; padding: 0; }}
-            QPushButton:hover {{ background: {DANGER}; border-radius: 2px; }}
-        """)
         self.close_btn.clicked.connect(self.close_requested.emit)
         # impede que o clique no X dispare o foco do chip (mousePressEvent do pai)
         self.close_btn.mousePressEvent = self._close_btn_mouse_press
         layout.addWidget(self.close_btn)
+
+        self._apply_palette()
 
     def _close_btn_mouse_press(self, event):
         # consome o evento para nao propagar ao chip (que emitiria 'clicked')
         QPushButton.mousePressEvent(self.close_btn, event)
         event.accept()
 
-    def _apply_style(self, focused):
-        border = safe_border_color(self._accent_color) if focused else BORDER
-        bg     = BG_ELEVATED if focused else "transparent"
-        self.setStyleSheet(f"""
-            #schip {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}
-            #schip:hover {{ background: {BG_ELEVATED}; border-color: {BORDER_HOVER}; }}
+    def _apply_palette(self):
+        """Re-aplica todos os styles do chip conforme tema atual."""
+        pal = _palette(self._light_mode)
+        # Icones
+        self.type_icon.setPixmap(
+            get_icon(self._type_icon_name, color=pal["text_secondary"], size=15).pixmap(15, 15)
+        )
+        self.close_btn.setIcon(get_icon("close", color=pal["text_muted"], size=11))
+        self.close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; border: none; padding: 0; }}
+            QPushButton:hover {{ background: {DANGER}; border-radius: 3px; }}
         """)
+        # Texto
+        self.name_label.setStyleSheet(f"""
+            color: {pal["text_primary"]}; font-family: 'Segoe UI';
+            font-size: 9.5pt; font-weight: 500; background: transparent;
+        """)
+        # Dot + cmd_label dependem do estado de atividade
+        if self._has_activity:
+            self.dot.setStyleSheet(f"color: {ACCENT}; font-size: 7pt; background: transparent;")
+            self.cmd_label.setStyleSheet(f"""
+                color: {pal["text_secondary"]}; font-family: 'Cascadia Mono','Consolas',monospace;
+                font-size: 7.5pt; background: transparent;
+            """)
+        else:
+            self.dot.setStyleSheet(f"color: {SUCCESS}; font-size: 7pt; background: transparent;")
+            self.cmd_label.setStyleSheet(f"""
+                color: {pal["text_muted"]}; font-family: 'Cascadia Mono','Consolas',monospace;
+                font-size: 7.5pt; background: transparent;
+            """)
+        # Background do chip (focused ou nao)
+        self._apply_style(self._is_focused)
+
+    def apply_theme(self, light_mode: bool):
+        self._light_mode = bool(light_mode)
+        self._apply_palette()
+
+    def _apply_style(self, focused):
+        # Item focado: fundo elevado + barra esquerda accent (3px) discreta.
+        # Hover: so muda o fundo, sem alterar borda (evita "salto" visual).
+        pal = _palette(self._light_mode)
+        if focused:
+            self.setStyleSheet(f"""
+                #schip {{
+                    background: {pal["elevated"]};
+                    border: none;
+                    border-left: 3px solid {safe_border_color(self._accent_color)};
+                    border-radius: 6px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                #schip {{
+                    background: transparent;
+                    border: none;
+                    border-left: 3px solid transparent;
+                    border-radius: 6px;
+                }}
+                #schip:hover {{ background: {pal["hover"]}; }}
+            """)
 
     def set_accent(self, color):
         self._accent_color = color
@@ -123,20 +240,14 @@ class SidebarChip(QFrame):
 
     def set_activity(self, activity):
         if activity:
-            self.dot.setStyleSheet(f"color: {ACCENT}; font-size: 8pt; background: transparent;")
+            self._has_activity = True
             short = activity[:30] + ("…" if len(activity) > 30 else "")
             self.cmd_label.setText(f"▸ {short}")
-            self.cmd_label.setStyleSheet(f"""
-                color: {TEXT_SECONDARY}; font-family: 'Cascadia Mono','Consolas',monospace;
-                font-size: 7.5pt; background: transparent;
-            """)
         else:
-            self.dot.setStyleSheet(f"color: {SUCCESS}; font-size: 8pt; background: transparent;")
+            self._has_activity = False
             self.cmd_label.setText("idle")
-            self.cmd_label.setStyleSheet(f"""
-                color: {TEXT_MUTED}; font-family: 'Cascadia Mono','Consolas',monospace;
-                font-size: 7.5pt; background: transparent;
-            """)
+        # Re-aplica styles porque dot/cmd_label dependem de _has_activity
+        self._apply_palette()
 
     def set_title(self, title):
         self.name_label.setText(title)
@@ -161,29 +272,27 @@ class SnapshotChip(QFrame):
     def __init__(self, info: dict):
         super().__init__()
         self.file_name = info["file_name"]
+        self._light_mode = False
         self.setObjectName("snapchip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(54)
-        self.setStyleSheet(f"""
-            #snapchip {{ background: transparent;
-                        border: 1px solid {BORDER}; border-radius: 6px; }}
-            #snapchip:hover {{ background: {BG_ELEVATED}; border-color: {BORDER_HOVER}; }}
-        """)
+        self.setFixedHeight(52)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 6, 8)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
+
+        # Icone de snapshot
+        self.icon = QLabel()
+        self.icon.setFixedSize(15, 15)
+        self.icon.setStyleSheet("background: transparent;")
+        layout.addWidget(self.icon)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
         self.name_label = QLabel(info["name"])
-        self.name_label.setStyleSheet(f"""
-            color: {TEXT_PRIMARY}; font-family: 'Segoe UI';
-            font-size: 9.5pt; font-weight: 500; background: transparent;
-        """)
-        self.name_label.setMaximumWidth(180)
+        self.name_label.setMaximumWidth(160)
         text_col.addWidget(self.name_label)
 
         node_count = info.get("node_count", 0)
@@ -191,11 +300,7 @@ class SnapshotChip(QFrame):
         when = datetime.fromtimestamp(modified_at).strftime("%d/%m %H:%M") if modified_at else "?"
         meta_text = f"{node_count} node{'s' if node_count != 1 else ''} · {when}"
         self.meta_label = QLabel(meta_text)
-        self.meta_label.setStyleSheet(f"""
-            color: {TEXT_MUTED}; font-family: 'Segoe UI';
-            font-size: 7.5pt; background: transparent;
-        """)
-        self.meta_label.setMaximumWidth(180)
+        self.meta_label.setMaximumWidth(160)
         text_col.addWidget(self.meta_label)
 
         layout.addLayout(text_col, 1)
@@ -203,18 +308,47 @@ class SnapshotChip(QFrame):
         self.menu_btn = QPushButton("⋮")
         self.menu_btn.setFixedSize(22, 22)
         self.menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.menu_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; color: {TEXT_SECONDARY};
-                border: none; padding: 0; font-size: 13pt;
-            }}
-            QPushButton:hover {{ background: {BG_SURFACE}; border-radius: 2px;
-                                color: {TEXT_PRIMARY}; }}
-        """)
         self.menu_btn.clicked.connect(self._show_menu)
         # consome o clique para nao propagar pra mousePressEvent do chip
         self.menu_btn.mousePressEvent = self._menu_btn_mouse_press
         layout.addWidget(self.menu_btn)
+
+        self._apply_palette()
+
+    def _apply_palette(self):
+        pal = _palette(self._light_mode)
+        self.setStyleSheet(f"""
+            #snapchip {{
+                background: transparent;
+                border: none;
+                border-left: 3px solid transparent;
+                border-radius: 6px;
+            }}
+            #snapchip:hover {{ background: {pal["hover"]}; }}
+        """)
+        self.icon.setPixmap(
+            get_icon("save", color=pal["text_secondary"], size=15).pixmap(15, 15)
+        )
+        self.name_label.setStyleSheet(f"""
+            color: {pal["text_primary"]}; font-family: 'Segoe UI';
+            font-size: 9.5pt; font-weight: 500; background: transparent;
+        """)
+        self.meta_label.setStyleSheet(f"""
+            color: {pal["text_muted"]}; font-family: 'Segoe UI';
+            font-size: 7.5pt; background: transparent;
+        """)
+        self.menu_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {pal["text_secondary"]};
+                border: none; padding: 0; font-size: 13pt;
+            }}
+            QPushButton:hover {{ background: {pal["elevated"]}; border-radius: 2px;
+                                color: {pal["text_primary"]}; }}
+        """)
+
+    def apply_theme(self, light_mode: bool):
+        self._light_mode = bool(light_mode)
+        self._apply_palette()
 
     def _menu_btn_mouse_press(self, event):
         QPushButton.mousePressEvent(self.menu_btn, event)
@@ -246,6 +380,93 @@ class SnapshotChip(QFrame):
             self.load_requested.emit(self.file_name)
 
 
+class SectionHeader(QWidget):
+    """Header colapsavel de uma secao da sidebar.
+
+    Mostra chevron-down/chevron-right + label em caps. Opcionalmente um
+    botao extra a direita (usado pelo SNAPSHOTS pra criar snapshot novo).
+    Click no header inteiro alterna o estado expandido <-> colapsado e
+    emite toggled(bool).
+    """
+
+    toggled = pyqtSignal(bool)  # True = expandido, False = colapsado
+
+    def __init__(self, label: str, extra_button: QPushButton = None):
+        super().__init__()
+        self.setObjectName("sectionhdr")
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._expanded = True
+        self._light_mode = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 8, 0)
+        layout.setSpacing(8)
+
+        self.chevron = QLabel()
+        self.chevron.setFixedSize(10, 10)
+        self.chevron.setStyleSheet("background: transparent;")
+        layout.addWidget(self.chevron)
+
+        self.label = QLabel(label)
+        layout.addWidget(self.label, 1)
+
+        self._apply_palette()
+
+        if extra_button is not None:
+            layout.addWidget(extra_button)
+            # Bota o botao extra fora do clique do header (pra nao toggle
+            # quando o user clica nele).
+            extra_button.installEventFilter(self)
+
+    def _apply_palette(self):
+        pal = _palette(self._light_mode)
+        self.setStyleSheet(f"""
+            #sectionhdr {{ background: transparent; border-radius: 4px; }}
+            #sectionhdr:hover {{ background: {pal["section_hover"]}; }}
+        """)
+        self.label.setStyleSheet(f"""
+            color: {pal["text_muted"]}; font-size: 7.5pt; font-weight: 700;
+            letter-spacing: 2px; background: transparent;
+        """)
+        self._refresh_chevron()
+
+    def apply_theme(self, light_mode: bool):
+        self._light_mode = bool(light_mode)
+        self._apply_palette()
+
+    def _refresh_chevron(self):
+        pal = _palette(self._light_mode)
+        name = "chevron-down" if self._expanded else "chevron-right"
+        self.chevron.setPixmap(get_icon(name, color=pal["text_muted"], size=10).pixmap(10, 10))
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, expanded: bool):
+        self._expanded = bool(expanded)
+        self._refresh_chevron()
+
+    def eventFilter(self, obj, event):
+        # Bloqueia toggle quando o clique foi no botao extra (ex: o "+" do snapshots).
+        from PyQt6.QtCore import QEvent
+        if event.type() == QEvent.Type.MouseButtonPress:
+            return False
+        return False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Verifica se o clique foi sobre o extra button (filho do header) —
+            # se sim, deixa o botao tratar; senao, faz toggle.
+            for child in self.children():
+                if isinstance(child, QPushButton) and child.underMouse():
+                    return
+            self._expanded = not self._expanded
+            self._refresh_chevron()
+            self.toggled.emit(self._expanded)
+        super().mousePressEvent(event)
+
+
 class TerminalsSidebar(QWidget):
     """Sidebar vertical com lista de terminais e snapshots."""
 
@@ -258,7 +479,7 @@ class TerminalsSidebar(QWidget):
     snapshot_overwrite_requested = pyqtSignal(str)
     snapshot_delete_requested    = pyqtSignal(str)
 
-    DEFAULT_WIDTH = 240
+    DEFAULT_WIDTH = 248
     COLLAPSED_WIDTH = 44
 
     def __init__(self):
@@ -266,22 +487,18 @@ class TerminalsSidebar(QWidget):
         self.chips = {}
         self._snap_chips = []
         self._collapsed = False
+        self._light_mode = False
         self.setObjectName("sidebar")
         self.setFixedWidth(self.DEFAULT_WIDTH)
-        self.setStyleSheet(f"""
-            #sidebar {{
-                background: {BG_SIDEBAR};
-                border-right: 1px solid {BORDER};
-            }}
-        """)
+        self._apply_root_style()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Header com brand
-        outer.addWidget(self._make_section_header("TERMINAIS"))
+        # Top bar: 3 dots decorativos + spacer + toggle «
+        outer.addWidget(self._make_top_bar())
 
         # Lista scrollavel — duas secoes (terminais + snapshots) numa unica scroll area
         self._scroll = QScrollArea(self)
@@ -300,8 +517,13 @@ class TerminalsSidebar(QWidget):
         self._inner = QWidget()
         self._inner.setStyleSheet("background: transparent;")
         self._col = QVBoxLayout(self._inner)
-        self._col.setContentsMargins(8, 10, 8, 10)
-        self._col.setSpacing(6)
+        self._col.setContentsMargins(6, 8, 6, 10)
+        self._col.setSpacing(4)
+
+        # Section TERMINAIS (colapsavel)
+        self._term_header = SectionHeader("TERMINAIS")
+        self._term_header.toggled.connect(self._on_terminals_toggled)
+        self._col.addWidget(self._term_header)
 
         # Empty-state label dos terminais
         self._empty = QLabel("Nenhum terminal aberto.\nUse a ilha de ferramentas.")
@@ -312,19 +534,7 @@ class TerminalsSidebar(QWidget):
         """)
         self._col.addWidget(self._empty)
 
-        # Sub-header de snapshots dentro do scroll (nao no header geral, pra rolar junto)
-        snap_header = QWidget()
-        snap_header.setFixedHeight(32)
-        snap_header.setStyleSheet(f"background: transparent; border-top: 1px solid {BORDER};")
-        sh = QHBoxLayout(snap_header)
-        sh.setContentsMargins(6, 0, 6, 0)
-        sh.setSpacing(4)
-        snap_title = QLabel("SNAPSHOTS")
-        snap_title.setStyleSheet(f"""
-            color: {TEXT_MUTED}; font-size: 8.5pt; font-weight: 600;
-            letter-spacing: 1.5px; background: transparent;
-        """)
-        sh.addWidget(snap_title, 1)
+        # Section SNAPSHOTS (colapsavel + botao "+")
         self._save_btn = QPushButton("+")
         self._save_btn.setFixedSize(22, 22)
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -341,8 +551,12 @@ class TerminalsSidebar(QWidget):
             }}
         """)
         self._save_btn.clicked.connect(self.snapshot_save_requested.emit)
-        sh.addWidget(self._save_btn)
-        self._col.addWidget(snap_header)
+
+        self._snap_header = SectionHeader("SNAPSHOTS", extra_button=self._save_btn)
+        self._snap_header.toggled.connect(self._on_snapshots_toggled)
+        # Spacer pra dar respiro entre TERMINAIS e SNAPSHOTS (sem linha dura).
+        self._col.addSpacing(12)
+        self._col.addWidget(self._snap_header)
 
         # Empty-state dos snapshots
         self._snap_empty = QLabel("Nenhum snapshot.\nClique '+' pra salvar o canvas atual.")
@@ -358,25 +572,26 @@ class TerminalsSidebar(QWidget):
         self._scroll.setWidget(self._inner)
         outer.addWidget(self._scroll, 1)
 
-    def _make_section_header(self, text: str) -> QWidget:
-        header = QWidget()
-        header.setFixedHeight(34)
-        header.setStyleSheet(f"background: transparent; border-bottom: 1px solid {BORDER};")
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(8, 1, 4, 1)
-        hl.setSpacing(8)
+        # Re-aplica a paleta agora que _inner e _scroll existem — a primeira
+        # chamada de _apply_root_style passou batido neles (criados depois).
+        self._apply_root_style()
 
-        self._header_label = QLabel(text)
-        self._header_label.setStyleSheet(f"""
-            color: {TEXT_MUTED}; font-size: 8.5pt; font-weight: 600;
-            letter-spacing: 1.5px; background: transparent;
-        """)
-        hl.addWidget(self._header_label, 1)
+    def _make_top_bar(self) -> QWidget:
+        """Top bar minimalista: so o toggle alinhado a direita."""
+        self._top_bar = QWidget()
+        header = self._top_bar
+        header.setFixedHeight(40)
+        header.setStyleSheet("background: transparent;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(14, 0, 8, 0)
+        hl.setSpacing(0)
+
+        hl.addStretch()
 
         self._toggle_btn = QPushButton()
-        self._toggle_btn.setIcon(get_icon("menu", color=TEXT_SECONDARY, size=22))
-        self._toggle_btn.setIconSize(QSize(22, 22))
-        self._toggle_btn.setFixedSize(32, 32)
+        self._toggle_btn.setIcon(get_icon("menu", color=TEXT_SECONDARY, size=18))
+        self._toggle_btn.setIconSize(QSize(18, 18))
+        self._toggle_btn.setFixedSize(28, 28)
         self._toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle_btn.setToolTip("Mostrar/ocultar lista de terminais")
         self._toggle_btn.setStyleSheet(f"""
@@ -384,7 +599,7 @@ class TerminalsSidebar(QWidget):
                 background: transparent; border: none; padding: 0;
             }}
             QPushButton:hover {{
-                background: {BG_ELEVATED}; border-radius: 4px;
+                background: {BG_ELEVATED}; border-radius: 6px;
             }}
         """)
         self._toggle_btn.clicked.connect(self.toggle)
@@ -395,9 +610,135 @@ class TerminalsSidebar(QWidget):
         """Alterna colapsado/expandido mantendo o botao preso na sidebar."""
         self._collapsed = not self._collapsed
         self.setFixedWidth(self.COLLAPSED_WIDTH if self._collapsed else self.DEFAULT_WIDTH)
-        self._header_label.setVisible(not self._collapsed)
         self._scroll.setVisible(not self._collapsed)
         self.collapse_toggled.emit(self._collapsed)
+
+    # ---------- tema (dark/light) ----------
+
+    def paintEvent(self, event):
+        """Pinta o bg da sidebar diretamente via QPainter — bypass de stylesheet
+        e palette do Qt, que estavam falhando em areas vazias (sidebar
+        colapsada, regiao apos o ultimo widget). Cantos arredondados nos lados
+        direitos sao aplicados via clipping path."""
+        pal = _palette(self._light_mode)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        # Radius so nos cantos direitos — esquerdo cola na borda da janela.
+        # Truque: desenhamos um retangulo estendido pra esquerda 12px alem do
+        # widget, com cantos arredondados de 12px; a parte que sai e cortada
+        # pela janela, deixando so os cantos direitos visiveis arredondados.
+        r = self.rect()
+        path.addRoundedRect(
+            r.x() - 12, r.y(), r.width() + 12, r.height(), 12, 12,
+        )
+        p.fillPath(path, QColor(pal["bg"]))
+        p.end()
+        super().paintEvent(event)
+
+    def _apply_root_style(self):
+        pal = _palette(self._light_mode)
+        bg = pal["bg"]
+
+        # Setamos bg em CADA widget interno explicitamente. Stylesheets do Qt
+        # nao herdam pra children, e o #sidebar so estiliza o widget root.
+        # Sem isso o _inner e o viewport do scroll continuam com o cinza
+        # padrao do sistema, ignorando o tema.
+        self.setStyleSheet(f"""
+            #sidebar {{
+                background: {bg};
+                border-top-right-radius: 12px;
+                border-bottom-right-radius: 12px;
+            }}
+        """)
+
+        if hasattr(self, "_inner") and self._inner is not None:
+            self._inner.setStyleSheet(f"background: {bg};")
+        if hasattr(self, "_scroll") and self._scroll is not None:
+            self._scroll.viewport().setStyleSheet(f"background: {bg};")
+        if hasattr(self, "_top_bar") and self._top_bar is not None:
+            self._top_bar.setStyleSheet(f"background: {bg};")
+
+        # QPalette como reforco (autoFillBackground pra widgets sem stylesheet).
+        bg_color = QColor(bg)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, bg_color)
+        palette.setColor(QPalette.ColorRole.Base,   bg_color)
+        self.setPalette(palette)
+        self.setAutoFillBackground(True)
+
+        # Forca Qt a re-renderizar o stylesheet imediatamente.
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def set_light_mode(self, enabled: bool):
+        """Adapta toda a sidebar ao tema (dark/light). Propaga pros children
+        (top bar, section headers, chips, snap chips, empty states)."""
+        self._light_mode = bool(enabled)
+        pal = _palette(self._light_mode)
+        self._apply_root_style()
+        # Top bar toggle button — refaz icon na cor do tema
+        self._toggle_btn.setIcon(get_icon("menu", color=pal["text_secondary"], size=18))
+        self._toggle_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; border: none; padding: 0; }}
+            QPushButton:hover {{ background: {pal["elevated"]}; border-radius: 6px; }}
+        """)
+        # Section headers
+        self._term_header.apply_theme(self._light_mode)
+        self._snap_header.apply_theme(self._light_mode)
+        # Save button (+) dentro do snap header
+        self._save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {pal["text_secondary"]};
+                border: 1px solid {pal["border"]}; border-radius: 3px;
+                font-size: 11pt; font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: {pal["elevated"]}; color: {pal["text_primary"]};
+                border-color: {pal["border_hover"]};
+            }}
+        """)
+        # Scroll area scrollbar
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}
+            QScrollBar::handle:vertical {{ background: {pal["border"]}; border-radius: 3px; min-height: 20px; }}
+            QScrollBar::handle:vertical:hover {{ background: {pal["border_hover"]}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+        # Empty states
+        empty_style = f"""
+            color: {pal["text_muted"]}; font-size: 8.5pt; background: transparent;
+            padding: 20px;
+        """
+        self._empty.setStyleSheet(empty_style)
+        self._snap_empty.setStyleSheet(empty_style.replace("padding: 20px", "padding: 16px 12px"))
+        # Chips (terminais + snapshots)
+        for chip in self.chips.values():
+            chip.apply_theme(self._light_mode)
+        for chip in self._snap_chips:
+            chip.apply_theme(self._light_mode)
+        # Forca repaint da arvore inteira (incluindo scroll area e children).
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    # ---------- expand/collapse das secoes ----------
+
+    def _on_terminals_toggled(self, expanded: bool):
+        # Mostra/esconde todos os SidebarChip + o empty-state de terminais.
+        for chip in self.chips.values():
+            chip.setVisible(expanded)
+        self._empty.setVisible(expanded and len(self.chips) == 0)
+
+    def _on_snapshots_toggled(self, expanded: bool):
+        # Mostra/esconde todos os SnapshotChip + o empty-state de snapshots.
+        for chip in self._snap_chips:
+            chip.setVisible(expanded)
+        self._snap_empty.setVisible(expanded and len(self._snap_chips) == 0)
+
+    # ---------- API publica ----------
 
     def sync(self, canvas):
         terminals = [
@@ -413,10 +754,9 @@ class TerminalsSidebar(QWidget):
                 chip.setParent(None)
                 chip.deleteLater()
 
-        # Adiciona novos terminais (insercao antes do empty-state dos terminais,
-        # que e indice 0 entao inserimos sempre no fim do bloco de chips de terminal,
-        # ou seja antes do empty-state dos terminais que fica em index 0...
-        # estrategia mais simples: insere antes do empty no fluxo atual)
+        # Adiciona novos terminais. Insere ANTES do empty-state pra manter a
+        # ordem visual (chips primeiro, depois o empty se a lista zera).
+        empty_idx = self._col.indexOf(self._empty)
         for _, frame in terminals:
             if frame not in self.chips:
                 chip = SidebarChip(frame)
@@ -428,8 +768,11 @@ class TerminalsSidebar(QWidget):
                 frame.header.title_changed.connect(
                     lambda t, c=chip: c.set_title(t)
                 )
-                # insere antes do empty-state dos terminais (index 0)
-                self._col.insertWidget(0, chip)
+                # Respeita o estado colapsado da secao e o tema atual.
+                chip.setVisible(self._term_header.is_expanded())
+                chip.apply_theme(self._light_mode)
+                self._col.insertWidget(empty_idx, chip)
+                empty_idx += 1
                 self.chips[frame] = chip
                 chip.set_activity(frame.inner.activity)
 
@@ -437,8 +780,10 @@ class TerminalsSidebar(QWidget):
         for frame, chip in self.chips.items():
             chip.set_focused(frame is canvas.focused_frame)
 
-        # Empty-state visibility
-        self._empty.setVisible(len(self.chips) == 0)
+        # Empty-state visibility — so aparece se a secao estiver expandida
+        self._empty.setVisible(
+            self._term_header.is_expanded() and len(self.chips) == 0
+        )
 
     def set_snapshots(self, snapshots: list):
         """Re-renderiza a lista de snapshot chips. Chamado depois de save/delete/rename."""
@@ -448,8 +793,7 @@ class TerminalsSidebar(QWidget):
             chip.deleteLater()
         self._snap_chips = []
 
-        # Posicao de insercao: depois do snap_empty (que e antes do stretch).
-        # Estrutura do layout: [terminal chips...] [empty terminais] [snap header] [snap empty] [snap chips...] [stretch]
+        # Insere depois do snap_empty (antes do stretch).
         insert_at = self._col.indexOf(self._snap_empty) + 1
 
         for info in snapshots:
@@ -458,8 +802,13 @@ class TerminalsSidebar(QWidget):
             chip.rename_requested.connect(self.snapshot_rename_requested.emit)
             chip.overwrite_requested.connect(self.snapshot_overwrite_requested.emit)
             chip.delete_requested.connect(self.snapshot_delete_requested.emit)
+            # Respeita o estado colapsado da secao e o tema atual.
+            chip.setVisible(self._snap_header.is_expanded())
+            chip.apply_theme(self._light_mode)
             self._col.insertWidget(insert_at, chip)
             insert_at += 1
             self._snap_chips.append(chip)
 
-        self._snap_empty.setVisible(len(snapshots) == 0)
+        self._snap_empty.setVisible(
+            self._snap_header.is_expanded() and len(snapshots) == 0
+        )

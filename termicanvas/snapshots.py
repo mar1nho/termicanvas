@@ -1,9 +1,8 @@
 """Snapshots — saves nomeados do canvas em ~/.termicanvas/snapshots/.
 
 Cada snapshot e um JSON contendo a mesma serializacao que session.py produz
-(nodes, connections, viewport, accent_color), mais metadados (nome de exibicao,
-created_at, modified_at). NAO inclui bus_enabled — bus state e preferencia de
-runtime, nao parte do layout.
+(nodes, connections, viewport, accent_color, bus_enabled, light_mode), mais
+metadados (nome de exibicao, created_at, modified_at).
 
 API publica:
 - list_snapshots() -> list[dict]: cada item tem name, file_name, node_count,
@@ -76,10 +75,13 @@ def snapshot_exists(display_name: str) -> bool:
     return _path_for(_sanitize_file_name(display_name)).exists()
 
 
-def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT) -> str:
+def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT,
+                  bus_enabled: bool = False, light_mode: bool = False) -> str:
     """Grava o estado atual do canvas como snapshot. Retorna o file_name usado.
 
     Sobrescreve se ja existir um snapshot com o mesmo nome sanitizado.
+    Salva tambem bus_enabled e light_mode para que o snapshot reconstitua
+    o ambiente exato (bus on/off, tema dark/light) ao ser carregado.
     """
     ensure_dirs()
     file_name = _sanitize_file_name(display_name)
@@ -109,6 +111,8 @@ def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT) -> str:
             "scroll_h":     canvas.horizontalScrollBar().value(),
             "scroll_v":     canvas.verticalScrollBar().value(),
             "accent_color": accent_color,
+            "bus_enabled":  bool(bus_enabled),
+            "light_mode":   bool(light_mode),
         },
         "nodes":       nodes,
         "connections": connections,

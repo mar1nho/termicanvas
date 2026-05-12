@@ -1,7 +1,7 @@
 """CanvasView (infinito, zoom/pan) + CanvasNav (overlay de navegacao)."""
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -73,6 +73,10 @@ class CanvasView(QGraphicsView):
         # Cor de destaque atual — usada pra pintar a borda do node focado.
         # MainWindow sincroniza via set_accent() ao mudar a accent global.
         self._accent_color = ACCENT
+        # Modo de tema: False = dark (fundo preto + grid branco com alpha),
+        # True = light (fundo branco + grid preto com alpha). Toggle vem da
+        # topbar via set_light_mode().
+        self._light_mode = False
 
         self.connections  = []   # [(src_frame, tgt_frame), ...]
         self._connecting  = False
@@ -95,8 +99,41 @@ class CanvasView(QGraphicsView):
         self._nav = CanvasNav(self)
         self._nav.raise_()
 
+    def set_light_mode(self, enabled: bool):
+        """Alterna entre modo dark (fundo preto + grid branco) e light (fundo
+        branco + grid preto). Atualiza tanto o brush base (usado fora do dirty
+        rect) quanto invalida a scene para forcar repaint do grid em zoom."""
+        self._light_mode = bool(enabled)
+        bg = "#ffffff" if self._light_mode else BG_CANVAS
+        self.setBackgroundBrush(QBrush(QColor(bg)))
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
+        self.viewport().update()
+        # Propaga pro nav (toolbar de zoom no canto inferior direito)
+        if hasattr(self, "_nav") and self._nav is not None:
+            self._nav.set_light_mode(self._light_mode)
+        # Propaga pros nodes (atualiza cor do icone do tipo no header)
+        for _proxy, frame in self.proxies:
+            frame.set_light_mode(self._light_mode)
+
+    def is_light_mode(self) -> bool:
+        return self._light_mode
+
     def drawBackground(self, painter, rect):
-        painter.fillRect(rect, QColor(BG_CANVAS))
+        # No light mode usa fundo branco + linhas pretas; no dark, o oposto.
+        # Alpha do grid eh BEM maior em light porque linha preta antialias em
+        # fundo branco com alpha baixo fica praticamente invisivel.
+        if self._light_mode:
+            bg = QColor("#ffffff")
+            line_rgb = (0, 0, 0)
+            alpha_thin = 60
+            alpha_bold = 110
+        else:
+            bg = QColor(BG_CANVAS)
+            line_rgb = (255, 255, 255)
+            alpha_thin = 14
+            alpha_bold = 28
+
+        painter.fillRect(rect, bg)
         scale = self.transform().m11()
 
         step = 40
@@ -108,7 +145,8 @@ class CanvasView(QGraphicsView):
         left = int(rect.left()) - (int(rect.left()) % step)
         top  = int(rect.top())  - (int(rect.top())  % step)
 
-        pen_thin = QPen(QColor(255, 255, 255, 14))
+        r, g, b = line_rgb
+        pen_thin = QPen(QColor(r, g, b, alpha_thin))
         pen_thin.setWidth(0)
         painter.setPen(pen_thin)
         x = left
@@ -122,7 +160,7 @@ class CanvasView(QGraphicsView):
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
             y += step
 
-        pen_bold = QPen(QColor(255, 255, 255, 28))
+        pen_bold = QPen(QColor(r, g, b, alpha_bold))
         pen_bold.setWidth(0)
         painter.setPen(pen_bold)
         x = left
@@ -142,8 +180,13 @@ class CanvasView(QGraphicsView):
         # alpha decrescente direto no background da scene, antes dos items
         # serem renderizados em cima. Custo despresivel (~0.1ms por node).
         painter.setPen(Qt.PenStyle.NoPen)
-        # (expansao, alpha) — de fora (mais difusa) pra dentro (mais opaca)
-        shadow_layers = ((18, 12), (12, 22), (7, 40), (3, 70))
+        # (expansao, alpha) — de fora (mais difusa) pra dentro (mais opaca).
+        # Light mode com alpha minimo pra parecer dropshadow sutil de macOS;
+        # qualquer coisa maior vira halo escuro feio em fundo branco.
+        if self._light_mode:
+            shadow_layers = ((18, 2), (12, 4), (7, 8), (3, 14))
+        else:
+            shadow_layers = ((18, 12), (12, 22), (7, 40), (3, 70))
         offset_y = 8
         radius = 10
         for proxy, frame in self.proxies:
@@ -264,6 +307,9 @@ class CanvasView(QGraphicsView):
         # Aplica a accent global antes de inserir, garantindo que nodes novos
         # nascam com a cor atual em vez do ACCENT default hardcoded.
         frame.set_node_color(self._accent_color)
+        # Aplica o tema atual para que o icone do tipo no header nasca na
+        # cor certa (escuro em fundo claro, claro em fundo escuro).
+        frame.set_light_mode(self._light_mode)
 
         proxy = self._scene.addWidget(frame)
         proxy.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -669,38 +715,40 @@ class CanvasView(QGraphicsView):
 
 
 class CanvasNav(QWidget):
+    """Toolbar flutuante de navegacao (zoom/fit/center) no canto inferior
+    direito do canvas. Visual identico ao ToolIsland: gradient translucido com
+    cantos arredondados pintado no paintEvent (em vez de stylesheet)."""
+
+    HEIGHT = 40
+
     def __init__(self, canvas):
         super().__init__(canvas)
         self.setObjectName("cannav")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedHeight(self.HEIGHT)
         self._accent_color = ACCENT
+        self._light_mode = False
         self._buttons = []
-        self.setStyleSheet(f"""
-            #cannav {{
-                background: {BG_SIDEBAR};
-                border: 1px solid {BORDER};
-                border-radius: 2px;
-            }}
-        """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
 
         nav_specs = [
-            ("minus",  "Zoom out",       canvas.zoom_out,   None),
-            ("plus",   "Zoom in",        canvas.zoom_in,    None),
-            (None,     "Resetar zoom",   canvas.reset_view, "1:1"),
-            ("square", "Encaixar tudo",  canvas.fit_all,    None),
+            ("minus",  "Zoom out",         canvas.zoom_out,      None),
+            ("plus",   "Zoom in",          canvas.zoom_in,       None),
+            (None,     "Resetar zoom",     canvas.reset_view,    "1:1"),
+            ("square", "Encaixar tudo",    canvas.fit_all,       None),
             ("box",    "Centralizar ilha", canvas.center_island, None),
         ]
         for icon_name, tooltip, slot, text in nav_specs:
             b = QPushButton(text or "")
-            b.setFixedSize(32, 32)
+            b.setFixedSize(28, 28)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setToolTip(tooltip)
             if icon_name:
-                b.setIcon(get_icon(icon_name, color=TEXT_SECONDARY, size=14))
-                b.setIconSize(QSize(14, 14))
+                b.setIcon(get_icon(icon_name, color=TEXT_SECONDARY, size=16))
+                b.setIconSize(QSize(16, 16))
             b.clicked.connect(slot)
             self._buttons.append(b)
             layout.addWidget(b)
@@ -710,22 +758,64 @@ class CanvasNav(QWidget):
         self.raise_()
 
     def _apply_button_style(self):
-        hover_border = self._accent_color
+        # Botoes sem borda, hover sutil — mesmo padrao do IconButton do island.
+        icon_color = TEXT_SECONDARY if not self._light_mode else "#4a4a4a"
+        hover_bg = "rgba(255, 255, 255, 0.05)" if not self._light_mode else "rgba(0, 0, 0, 0.06)"
         style = f"""
             QPushButton {{
-                background: {BG_ELEVATED}; color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 2px;
-                font-size: 11pt; font-weight: 500;
+                background: transparent; color: {icon_color};
+                border: 1px solid transparent; border-radius: 6px;
+                font-size: 10pt; font-weight: 600;
             }}
-            QPushButton:hover {{
-                color: {TEXT_PRIMARY}; border-color: {hover_border};
-                background: {BG_SURFACE};
-            }}
-            QPushButton:pressed {{ background: {BG_TERMINAL}; }}
+            QPushButton:hover {{ background: {hover_bg}; }}
         """
         for b in self._buttons:
             b.setStyleSheet(style)
+            # Re-renderiza icone com cor adequada ao tema
+            icon_name = b.toolTip().split()[0].lower() if not b.text() else None
+            # Caminho mais robusto: usar o icon_name guardado se houver
+        # Reaplica icones na cor certa (precisa re-mapear pelo tooltip)
+        icon_map = {
+            "Zoom out":         "minus",
+            "Zoom in":          "plus",
+            "Encaixar tudo":    "square",
+            "Centralizar ilha": "box",
+        }
+        for b in self._buttons:
+            name = icon_map.get(b.toolTip())
+            if name:
+                b.setIcon(get_icon(name, color=icon_color, size=16))
+
+    def paintEvent(self, _event):
+        # Pintura custom: gradient translucido + cantos arredondados, identico
+        # ao ToolIsland. paintEvent ignora stylesheet, por isso usamos QPainter.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect.x(), rect.y(), rect.width(), rect.height(), 16, 16)
+
+        grad = QLinearGradient(0, 0, 0, rect.height())
+        if self._light_mode:
+            grad.setColorAt(0.0, QColor(240, 240, 240, 220))
+            grad.setColorAt(1.0, QColor(220, 220, 220, 220))
+            border_color = QColor(0, 0, 0, 40)
+        else:
+            grad.setColorAt(0.0, QColor(48, 48, 48, 190))
+            grad.setColorAt(1.0, QColor(34, 34, 34, 190))
+            border_color = QColor(255, 255, 255, 36)
+        p.fillPath(path, grad)
+
+        p.setPen(border_color)
+        p.drawPath(path)
+        p.end()
 
     def set_accent(self, color):
         self._accent_color = color
         self._apply_button_style()
+
+    def set_light_mode(self, enabled: bool):
+        self._light_mode = bool(enabled)
+        self._apply_button_style()
+        self.update()

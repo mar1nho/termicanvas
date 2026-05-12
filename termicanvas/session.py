@@ -70,18 +70,20 @@ def serialize_canvas(canvas):
 
 
 def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warned=False,
-                 snapshot_load_warned=False):
+                 snapshot_load_warned=False, light_mode=False):
     nodes, conns = serialize_canvas(canvas)
+    canvas_data = {
+        "scale":                 canvas.transform().m11(),
+        "scroll_h":              canvas.horizontalScrollBar().value(),
+        "scroll_v":              canvas.verticalScrollBar().value(),
+        "accent_color":          accent_color,
+        "bus_enabled":           bool(bus_enabled),
+        "bus_toggle_warned":     bool(bus_toggle_warned),
+        "snapshot_load_warned":  bool(snapshot_load_warned),
+        "light_mode":            bool(light_mode),
+    }
     data = {
-        "canvas": {
-            "scale":                 canvas.transform().m11(),
-            "scroll_h":              canvas.horizontalScrollBar().value(),
-            "scroll_v":              canvas.verticalScrollBar().value(),
-            "accent_color":          accent_color,
-            "bus_enabled":           bool(bus_enabled),
-            "bus_toggle_warned":     bool(bus_toggle_warned),
-            "snapshot_load_warned":  bool(snapshot_load_warned),
-        },
+        "canvas": canvas_data,
         "nodes": nodes,
         "connections": conns,
     }
