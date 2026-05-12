@@ -186,7 +186,9 @@ class SidebarChip(QFrame):
             color: {pal["text_primary"]}; font-family: 'Segoe UI';
             font-size: 9.5pt; font-weight: 500; background: transparent;
         """)
-        # Dot + cmd_label dependem do estado de atividade
+        # Dot + cmd_label: dot vira branco em dark / preto em light pra
+        # contraste maximo. Atividade ainda usa ACCENT.
+        idle_dot = "#000000" if self._light_mode else "#ffffff"
         if self._has_activity:
             self.dot.setStyleSheet(f"color: {ACCENT}; font-size: 7pt; background: transparent;")
             self.cmd_label.setStyleSheet(f"""
@@ -194,7 +196,7 @@ class SidebarChip(QFrame):
                 font-size: 7.5pt; background: transparent;
             """)
         else:
-            self.dot.setStyleSheet(f"color: {SUCCESS}; font-size: 7pt; background: transparent;")
+            self.dot.setStyleSheet(f"color: {idle_dot}; font-size: 7pt; background: transparent;")
             self.cmd_label.setStyleSheet(f"""
                 color: {pal["text_muted"]}; font-family: 'Cascadia Mono','Consolas',monospace;
                 font-size: 7.5pt; background: transparent;

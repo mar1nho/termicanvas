@@ -82,6 +82,7 @@ class NodeHeader(QWidget):
         self._dragging     = False
         self._last_global  = None
         self._is_focused   = False  # alimenta o indicador idle/ativo
+        self._light_mode   = False
         self._apply_style()
 
         layout = QHBoxLayout(self)
@@ -268,17 +269,25 @@ class NodeHeader(QWidget):
         self._refresh_dot()
 
     def _refresh_dot(self):
+        # Branco em dark, preto em light pra contraste maximo em qualquer tema.
+        active_color = "#000000" if self._light_mode else "#ffffff"
+        muted_color  = "#888888" if self._light_mode else "#555555"
         if self._is_focused:
-            # ativo: verde brilhante, fonte maior, bold (efeito glow)
+            # ativo: cor solida, fonte maior, bold (efeito glow)
             self.dot.setStyleSheet(
-                f"color: {SUCCESS}; font-size: 11pt; font-weight: bold;"
+                f"color: {active_color}; font-size: 11pt; font-weight: bold;"
                 f" background: transparent;"
             )
         else:
-            # idle: azul muted
+            # idle: cor muted
             self.dot.setStyleSheet(
-                "color: #3a5a8a; font-size: 9pt; background: transparent;"
+                f"color: {muted_color}; font-size: 9pt; background: transparent;"
             )
+
+    def set_light_mode(self, enabled: bool):
+        """Atualiza cor do dot indicador conforme tema."""
+        self._light_mode = bool(enabled)
+        self._refresh_dot()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -411,9 +420,10 @@ class NodeFrame(QFrame):
         return ""
 
     def set_light_mode(self, enabled: bool):
-        """Atualiza icone do tipo conforme tema (cor adaptada)."""
+        """Atualiza icone do tipo + dot indicador conforme tema."""
         self._light_mode = bool(enabled)
         self.header.set_type_icon(self.header._type_icon_name, light_mode=self._light_mode)
+        self.header.set_light_mode(self._light_mode)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
