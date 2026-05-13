@@ -56,19 +56,37 @@ Originalmente era o `Powershell-Maestro` (versão Rust, Linux-only). Foi reescri
 
 ### Diálogo de novo terminal
 
-Ao clicar em `PowerShell / CMD / Claude / Gemini`, abre um modal com:
+Disparado por **shift-clique** (ou clique-direito) em um botão da Tool Island. Abre um modal com:
 
 - **Nome do terminal** (opcional, default: `<Tipo> N`)
 - **Diretório de trabalho** (default: `Vault/dattos-ia`) com botões "Pasta padrão" e "Escolher outra…"
-- **Para agentes:** seleção de Responsibility (role) + opção de "criar manifesto gerenciado" se o cwd ainda não tem `CLAUDE.md`/`GEMINI.md`
+- **Para agentes:**
+  - Seleção de Responsibility (role)
+  - Opção de "criar manifesto gerenciado" se o cwd ainda não tem `CLAUDE.md`/`GEMINI.md`
+  - Checkbox **"Promover a orquestrador"** — apende o system prompt de orquestração no manifesto (idempotente: substitui in-place se já existe entre os markers `<!-- TermiCanvas orchestrator -->`)
 
 ### Topbar
 
 - **Toggle do bus** — bolinha verde no canto esquerdo. Clique pra desligar o servidor de mensagens entre agentes; isso fecha todos os terminais e widgets do canvas e bota o app em modo enxuto. A bolinha fica vermelha pulsante quando desligado. Estado persiste entre sessões; o primeiro toggle pede confirmação com checkbox "não perguntar de novo"
 - Brand `TERMICANVAS`
 - Toggle da sidebar
-- Botões de criação rápida: `PowerShell`, `CMD`, `Claude`, `Gemini`, `Nota`, `Prompt`, `Agent`, `Debug`
+- Toggle de tema (dark/light)
+- Botão `Debug` (abre/foca o Debug Monitor)
 - Swatch global de accent color (afeta todos os nodes que ainda não têm cor custom)
+
+### Tool Island
+
+Toolbar **flutuante e arrastável** com os botões de criação de nodes. Vive sobre o canvas com fundo translúcido em gradiente, divisor entre os grupos (terminais vs. widgets) e adapta paleta ao tema (dark/light).
+
+Botões: `PowerShell`, `CMD`, `Claude`, `Gemini` · `Nota`, `Prompt`, `Agent`, `Debug Monitor`.
+
+Modos de criação:
+
+- **Clique simples** → arma o modo de inserção: o próximo drag no canvas desenha o retângulo onde o node vai nascer (drag-to-create). Clique sem drag cria no tamanho default.
+- **Shift+clique** ou **clique-direito** → arma o modo *com dialog* (abre o `TerminalLaunchDialog` antes da criação).
+- **Duplo-clique** → cria imediatamente no centro da viewport com defaults.
+
+A máquina de estados fica em `InsertController` (`IDLE → ARMED → DRAGGING → commit`); o `NodeFactory` centraliza o dispatch `kind → widget` e o singleton handling do Debug Monitor.
 
 ### Sidebar (terminais abertos)
 
@@ -95,13 +113,17 @@ Ao criar um terminal-agente, o app:
 
 1. Sobe o shell no diretório escolhido com `TERMICANVAS_BUS_URL` e `TERMICANVAS_NODE_ID` injetados no env
 2. Em modo gerenciado, escreve a Responsibility selecionada como manifesto + instalação da skill `termicanvas-send`
-3. Envia `cls` + comando da CLI (`claude` ou `gemini`) ao prompt assim que detecta silêncio (~900 ms)
+3. Se a opção "Promover a orquestrador" foi marcada, apende o system prompt de orquestração no manifesto antes de subir a CLI
+4. Envia `cls` + comando da CLI (`claude` ou `gemini`) ao prompt assim que detecta silêncio (~900 ms)
 
 Botão 📝 no header do agente abre o `CLAUDE.md`/`GEMINI.md` do `cwd` em editor inline (disponível para qualquer agente com `cwd` configurado).
 
-### Auto-responder
+A skill `termicanvas-send` é distribuída em duas formas:
 
-Toggle no header do terminal-agente — quando ativo, ao receber uma mensagem do bus o agente captura a resposta gerada e a devolve automaticamente ao emissor após o próximo silêncio.
+- `skills/claude-code-skill.md` — formato Claude Code (`.claude/skills/termicanvas-send/SKILL.md`)
+- `skills/gemini-extension.md` — formato Gemini CLI (`.gemini/extensions/termicanvas-send/`)
+
+No modo gerenciado a skill é instalada automaticamente; em projetos com manifesto próprio (modo `existing`), copiar manualmente.
 
 ### Responsibilities (roles)
 
@@ -120,11 +142,62 @@ Servidor HTTP em `127.0.0.1:<porta-livre>` exposto via env var `TERMICANVAS_BUS_
 
 Endpoints:
 
-- `POST /send` `{from, to, message}` — enfileira mensagem
-- `GET /list` — lista terminais (id, nome, agent_kind)
-- `GET /health` — ping
+| Método | Rota | Payload / Query | Função |
+|---|---|---|---|
+| POST | `/send` | `{from, to, message}` | enfileira mensagem direta |
+| POST | `/broadcast` | `{from, message, exclude?}` | manda pra todos os agentes (exceto remetente + opcionais) |
+| POST | `/spawn` | `{kind, name, role_md, parent_cwd?}` | cria um novo node-agente no canvas |
+| GET | `/list` | — | lista terminais (id, nome, agent_kind) |
+| GET | `/inbox` | `?node_id=X` | mensagens pendentes pra X |
+| GET | `/status` | `?msg_id=X` | `pending` \| `delivered` \| `expired` |
+| GET | `/health` | — | ping |
 
-Regra de entrega (estilo Maestri): a mensagem só é injetada no PTY do destinatário quando ele está **idle** **e desselecionado**. Se estiver focado, fica na fila até perder o foco. Isso evita pisar em digitação manual.
+Regra de entrega (estilo Maestri): a mensagem só é injetada no PTY do destinatário quando ele está **idle** **e desselecionado**. Se estiver focado, fica na fila até perder o foco. Isso evita pisar em digitação manual. TTL de 5 min — mensagens não entregues nesse período viram `expired`.
+
+### CLI `termicanvas` (agente↔agente)
+
+Cada agente recebe automaticamente acesso à CLI Python expondo o bus. Comandos:
+
+```
+python -m termicanvas.cli list                       # lista todos os agentes ativos
+python -m termicanvas.cli whoami                     # seu próprio node_id
+python -m termicanvas.cli send <node_id> "mensagem"  # mensagem direta
+python -m termicanvas.cli broadcast "mensagem"       # mensagem pra todos os agentes
+python -m termicanvas.cli inbox                      # mensagens pendentes pra você
+python -m termicanvas.cli status <msg_id>            # checa se mensagem foi entregue
+python -m termicanvas.cli spawn <kind> "<nome>"      # cria um novo agente no canvas
+```
+
+`spawn` aceita `--role-file role.md` (recomendado, evita o limite de ~965 B do parser de comandos do Claude Code) ou role via **stdin** pra payloads curtos. Kinds suportados: `claude`, `gemini`, `powershell`, `cmd` (apenas claude/gemini consomem `role_md`).
+
+### Orquestração
+
+Qualquer agente pode ser **promovido a orquestrador** na criação (checkbox no dialog) ou via `promote_to_orchestrator(cwd, agent_kind)` no código. A promoção é idempotente: apende um bloco demarcado pelos markers `<!-- TermiCanvas orchestrator -->` / `<!-- /TermiCanvas orchestrator -->` no `CLAUDE.md`/`GEMINI.md`, ou substitui in-place se já existir. Funciona tanto em manifestos gerenciados quanto em manifestos pré-existentes do projeto.
+
+O system prompt injetado ensina o agente a:
+
+1. Listar agentes ativos via `list`
+2. Dividir trabalho em sub-tarefas atômicas
+3. Delegar via `send <node_id> "..."` com critério de sucesso explícito
+4. Monitorar respostas via `inbox` (entrega assíncrona, idle-aware)
+5. Agregar retornos e responder ao humano
+
+Quando o orquestrador chama `spawn`, o TermiCanvas:
+
+1. Cria uma pasta isolada em `<parent_cwd>/.termicanvas/<slug>/`
+2. Escreve o manifesto com o `role_md` fornecido + **bloco automático "Como responder mensagens"** (instruindo o agente a responder via `cli send` em vez de escrever no PTY — comunicação máquina-a-máquina)
+3. Spawna o terminal correspondente posicionado abaixo do orquestrador
+4. Desenha uma **chain visual** (catenária) ligando os dois no canvas
+
+Permissões pré-aprovadas: agentes promovidos a orquestrador (e seus spawnados) recebem `.claude/settings.local.json` autorizando qualquer comando `python -m termicanvas.cli ...` sem prompts.
+
+### Auto-responder
+
+Toggle no header de cada terminal-agente. Quando ativo, ao receber uma mensagem do bus o agente captura a resposta gerada e a devolve automaticamente ao emissor após o próximo silêncio do prompt. **Agentes nascem com auto-reply ON por default** — pra que o fluxo orquestrador→spawn funcione sem o user precisar clicar em cada cabeçalho.
+
+### Chain visual
+
+Quando um orquestrador spawna um agente filho, o canvas desenha uma corrente (catenária) ligando o header do pai ao do filho. A linha é fina, tracejada e adapta a cor ao tema. Também é possível criar chains manuais entre agentes pelo botão dedicado no header.
 
 ### Debug Monitor
 
@@ -240,6 +313,23 @@ Resultado em `dist\TermiCanvas.exe` (~50 MB). O usuário final não precisa de P
 ---
 
 ## Changelog técnico recente
+
+### Orquestração de agentes (2026-05)
+
+- **Promoção a orquestrador** (`termicanvas/agents.py`): novo `promote_to_orchestrator(cwd, agent_kind)` apende um system prompt completo de orquestração no `CLAUDE.md`/`GEMINI.md`, demarcado por markers idempotentes. Disponível como checkbox no `TerminalLaunchDialog` e aplicado *antes* de spawnar o terminal — funciona mesmo em manifestos do projeto não-gerenciados.
+- **Spawn dinâmico** (`/spawn` no bus + `cli.py spawn`): orquestradores criam novos agentes em pastas isoladas (`<cwd>/.termicanvas/<slug>/`). Manifesto é montado por `build_spawned_manifest()` → marker + role customizado + bloco fixo "Como responder mensagens" (garante que o agente fale via `cli send`, não no PTY).
+- **CLI completa**: `list`, `whoami`, `send`, `broadcast`, `inbox`, `status`, `spawn`. Endpoints REST espelhados em `bus.py` (`/send`, `/broadcast`, `/spawn`, `/list`, `/inbox`, `/status`, `/health`).
+- **Auto-reply ON por default** em agentes-terminal — fluxo orquestrador→spawn funciona sem clicar em cada header.
+- **Permissões pré-aprovadas**: agentes orquestradores e spawnados recebem `.claude/settings.local.json` autorizando `python -m termicanvas.cli ...` sem prompt.
+- **Skill `termicanvas-send`** publicada em `skills/claude-code-skill.md` + `skills/gemini-extension.md` — instalável em qualquer agente fora do contexto gerenciado.
+
+### Tool Island + drag-to-create (2026-05)
+
+- **`termicanvas/island.py`** — toolbar flutuante (gradient translúcido, arrastável, adaptativa ao tema) substitui os botões de criação que viviam na Topbar. Dois grupos visuais: terminais (PS/CMD/Claude/Gemini) e widgets (Nota/Prompt/Agent/Debug).
+- **`termicanvas/insert_controller.py`** — `QObject` state machine (`IDLE → ARMED → DRAGGING`). Sem GUI; `ToolIsland` arma, `CanvasView` dispara `start/update/finish_drag`, e o controller emite `commit_requested(kind, geometry, with_dialog)`.
+- **`termicanvas/node_factory.py`** — centraliza criação de qualquer node a partir de um `kind` semântico. Substitui os 6 métodos `_add_*` antes espalhados em `main.py`. Cuida de: tamanhos default por kind, posição (se `geometry` veio do drag), dispatch `kind → widget class`, abertura opcional do `TerminalLaunchDialog`, singleton handling do Debug Monitor.
+- UX: clique simples = drag-to-create, shift/right-click = drag-to-create *com dialog*, duplo-clique = cria no centro com defaults.
+- Tests novos em `tests/test_insert_controller.py`, `tests/test_island.py`, `tests/test_node_factory.py`.
 
 ### Memory leak fix (2026-04-27)
 
