@@ -53,11 +53,16 @@ def _new_msg_id():
     return uuid.uuid4().hex[:10]
 
 
+POKE_IDLE_SECS = 1.5
+POKE_COMMAND   = "python -m termicanvas.cli inbox"
+
+
 class Bus(QObject):
     """Bus singleton-ish — instancia uma vez no main e passa adiante."""
 
     message_delivered = pyqtSignal(str, str, str)   # from, to, msg (telemetria)
     spawn_requested   = pyqtSignal(dict)            # request dict (UI thread cria o terminal)
+    pending_changed   = pyqtSignal(str, int)        # node_id, count (UI atualiza badge)
 
     def __init__(self, ttl=DEFAULT_TTL):
         super().__init__()
@@ -72,6 +77,9 @@ class Bus(QObject):
         self._port   = None
         self._canvas = None         # injetado depois pra checar focado
         self._ttl    = ttl
+        # Auto-poke: pra cada node, o ultimo timestamp em que cutucamos.
+        # Evita spammar `inbox` se o agente continua nao consumindo.
+        self._last_poke = {}        # node_id -> ts
 
         self._tick = QTimer(self)
         self._tick.setInterval(250)
@@ -146,6 +154,8 @@ class Bus(QObject):
         }
         with self._queue_lock:
             self._queue.append(item)
+            count = self._pending_count_unlocked(to_id)
+        self.pending_changed.emit(to_id, count)
         return msg_id
 
     def broadcast(self, from_id, message, exclude=None):
@@ -155,6 +165,7 @@ class Bus(QObject):
         if from_id:
             exclude.add(from_id)
         ids = []
+        touched = []
         with self._queue_lock:
             for node_id in self._nodes.keys():
                 if node_id in exclude:
@@ -168,16 +179,34 @@ class Bus(QObject):
                     "created_at": time.time(),
                 })
                 ids.append(msg_id)
+                touched.append(node_id)
+            counts = {nid: self._pending_count_unlocked(nid) for nid in set(touched)}
+        for nid, c in counts.items():
+            self.pending_changed.emit(nid, c)
         return ids
 
     def inbox(self, node_id):
-        """Lista mensagens pendentes pra um node especifico."""
+        """Consome mensagens pendentes pra um node especifico. Remove da fila,
+        marca delivered e retorna a lista pra quem fez o GET."""
+        consumed = []
         with self._queue_lock:
-            return [
-                {k: v for k, v in item.items()}
-                for item in self._queue
-                if item["to"] == node_id
-            ]
+            remaining = []
+            for item in self._queue:
+                if item["to"] == node_id:
+                    consumed.append({k: v for k, v in item.items()})
+                    self._delivered[item["msg_id"]] = "delivered"
+                else:
+                    remaining.append(item)
+            self._queue = remaining
+        if consumed:
+            self.pending_changed.emit(node_id, 0)
+            for item in consumed:
+                self.message_delivered.emit(item["from"], node_id, item["message"])
+        return consumed
+
+    def _pending_count_unlocked(self, node_id):
+        """Conta mensagens pendentes pra um node. Assume lock ja segurado."""
+        return sum(1 for item in self._queue if item["to"] == node_id)
 
     def status(self, msg_id):
         """Status de uma mensagem: pending, delivered, expired ou unknown."""
@@ -305,63 +334,69 @@ class Bus(QObject):
             record_error("bus._spin_server.port_file", e)
 
     def _process_queue(self):
+        """Tick periodico (250ms). Duas funcoes:
+
+        1. TTL: descarta mensagens antigas demais ou pra nodes que sairam.
+        2. Auto-poke: pra terminais de agente (claude/gemini) com fila pendente,
+           injeta literal `python -m termicanvas.cli inbox\\r` no PTY apos
+           POKE_IDLE_SECS de silencio E sem foco. SO o comando, nunca o payload.
+           O agente roda o `inbox`, consome via GET, e o badge zera.
+        """
         if not self._queue:
             return
 
         now = time.time()
-
-        # Snapshot da fila pra processar fora do lock
-        with self._queue_lock:
-            pending = list(self._queue)
-            self._queue.clear()
-
         focused_frame = getattr(self._canvas, "focused_frame", None) if self._canvas else None
-        leftover = []
 
-        for item in pending:
-            msg_id     = item["msg_id"]
-            from_id    = item["from"]
-            to_id      = item["to"]
-            message    = item["message"]
-            created_at = item["created_at"]
+        expired_nodes = set()
+        with self._queue_lock:
+            kept = []
+            for item in self._queue:
+                if (now - item["created_at"]) > self._ttl:
+                    self._delivered[item["msg_id"]] = "expired"
+                    expired_nodes.add(item["to"])
+                    continue
+                target = self._nodes.get(item["to"])
+                if not target or not target.terminal or not target.terminal.alive:
+                    self._delivered[item["msg_id"]] = "expired"
+                    expired_nodes.add(item["to"])
+                    continue
+                kept.append(item)
+            self._queue = kept
+            counts = {nid: self._pending_count_unlocked(nid) for nid in expired_nodes}
 
-            # TTL: descarta mensagens antigas demais
-            if (now - created_at) > self._ttl:
-                self._delivered[msg_id] = "expired"
-                continue
+        for nid, c in counts.items():
+            self.pending_changed.emit(nid, c)
 
+        # Auto-poke: agrupa pendentes por destinatario
+        targets = set(item["to"] for item in self._queue)
+        for to_id in targets:
             target = self._nodes.get(to_id)
             if not target or not target.terminal or not target.terminal.alive:
-                # Destinatario saiu — descarta
-                self._delivered[msg_id] = "expired"
                 continue
-
-            # Regra: idle E desselecionado
-            is_focused = (target.frame is focused_frame)
-            is_idle    = not bool(target.terminal.activity)
-
-            if is_focused or not is_idle:
-                leftover.append(item)
+            if not target.agent_kind:
+                # Shell puro: so badge, sem auto-poke
                 continue
-
-            # Entrega: injeta texto separado do Enter, com prefixo do emissor
+            if target.frame is focused_frame:
+                # Usuario olhando: nao cutuca
+                continue
+            term = target.terminal
+            # Idle real = sem chegada de dado por POKE_IDLE_SECS. Usa o
+            # idle_timer interno do terminal como proxy (esta ativo enquanto
+            # bytes chegam, dispara quando para).
+            last_data = getattr(term, "_last_data_ts", 0)
+            if now - last_data < POKE_IDLE_SECS:
+                continue
+            # Anti-spam: nao re-poke se ja cutucou ha < POKE_IDLE_SECS * 2
+            last = self._last_poke.get(to_id, 0)
+            if now - last < POKE_IDLE_SECS * 2:
+                continue
             try:
-                from_name = None
-                src = self._nodes.get(from_id) if from_id else None
-                if src:
-                    from_name = src.name
-                target.terminal.inject_message(
-                    message, from_node_id=from_id, from_name=from_name,
-                )
-                self._delivered[msg_id] = "delivered"
-                self.message_delivered.emit(from_id, to_id, message)
-            except Exception:
-                leftover.append(item)
-
-        if leftover:
-            with self._queue_lock:
-                # Repoe na frente preservando ordem original
-                self._queue = leftover + self._queue
+                term.send(POKE_COMMAND)
+                self._last_poke[to_id] = now
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("bus._process_queue.poke", e)
 
 
 # ---------- helpers de cliente (usado pela CLI) ----------

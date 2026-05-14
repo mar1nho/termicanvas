@@ -43,7 +43,6 @@ def serialize_canvas(canvas):
                 "agent_kind":    frame.inner.agent_kind,
                 "role_name":     frame.inner.role_name,
                 "manifest_mode": frame.inner.manifest_mode,
-                "auto_reply":    frame.inner.auto_reply,
             })
         elif isinstance(frame.inner, NoteWidget):
             base.update({"type": "note", "content": frame.inner.toPlainText()})

@@ -108,66 +108,6 @@ ANSI_COLORS = {
 _BASE_COLOR_NAMES = {"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"}
 
 
-# Linhas que NUNCA devem ir pra resposta automatica do agente —
-# sao chrome de TUIs (claude code statusline, separadores, prompts vazios).
-_CHROME_KEYWORDS = (
-    "Session ", "Weekly ", "Sonnet ", "Opus ", "Haiku ", "Context ",
-    "Concocting", "Tip:", "thought for", "tokens", "↓", "↑", "✶",
-    "claude.de/desktop", "Run Claude Code", "shift+tab",
-)
-_BOX_DRAWING = set("─━┓┛┃║╔╗╚╝╦╠╣╬│┴┬┼├┤┌┐└┘═")
-
-
-def _is_chrome_line(line):
-    s = line.strip()
-    if not s:
-        return True
-    # box-drawing puro (separadores)
-    visible = [c for c in s if not c.isspace()]
-    if visible and all(c in _BOX_DRAWING for c in visible):
-        return True
-    # statusline / dicas / overlays do claude code
-    if any(kw in s for kw in _CHROME_KEYWORDS):
-        return True
-    # prompt vazio
-    if s in ("❯", ">", "▏"):
-        return True
-    return False
-
-
-def _clean_tui_response(raw):
-    """Filtra chrome de TUI (statusline, separadores) e o eco da injecao.
-
-    Pega so o miolo da resposta do agente e limita o tamanho pra nao inundar
-    o emissor.
-    """
-    if not raw:
-        return ""
-    lines = raw.splitlines()
-    cleaned = []
-    for line in lines:
-        if _is_chrome_line(line):
-            continue
-        stripped = line.strip()
-        # eco da mensagem injetada (ex: "[de: Lider] ...") — pular
-        if stripped.startswith("[de:"):
-            continue
-        # bullet do claude (●) opcional — remove pra resposta limpa
-        if stripped.startswith("●"):
-            stripped = stripped.lstrip("● ").strip()
-        if stripped:
-            cleaned.append(stripped)
-
-    response = "\n".join(cleaned).strip()
-    # cap em 2000 chars
-    if len(response) > 2000:
-        response = response[:1997] + "..."
-    # se ficou trivial demais, ignora
-    if len(response) < 3:
-        return ""
-    return response
-
-
 class PtyBridge(QObject):
     data_received = pyqtSignal(str)
 
@@ -200,13 +140,10 @@ class TerminalWidget(QTextEdit):
         self.manifest_mode = manifest_mode
         self.node_id      = node_id
         self.env_extra    = env_extra
-        # Auto-responder: quando True, depois de receber via bus + idle, captura
-        # texto novo no terminal e envia de volta ao emissor via bus.
-        self.auto_reply         = False
-        self._pending_reply_to  = None  # node_id do emissor da ultima mensagem
-        self._reply_baseline    = ""    # _last_content snapshot ANTES da injecao
-        self._bus_ref           = None  # injetado pelo main.py apos registrar
         self._startup_command = startup_command
+        # Timestamp do ultimo byte recebido — usado pelo bus pra decidir
+        # se o terminal esta idle o suficiente pra auto-poke do inbox.
+        self._last_data_ts = 0.0
         # CLI do agente sobe via prompt do shell — _check_idle dispara quando PS estiver pronto
         if agent_kind:
             self._startup_command = agents.startup_command(agent_kind)
@@ -273,7 +210,6 @@ class TerminalWidget(QTextEdit):
         self._programmatic_scroll  = False  # suprime detecao durante setValue interno
 
         self._render_dirty = False
-        self._last_content = ""
         self._last_rows: list = []  # ultimo all_rows renderizado, para diff incremental
         self._render_timer = QTimer(self)
         # 100ms = 10fps. Suave o suficiente pra terminal e -20% rebuilds vs 80ms
@@ -345,6 +281,8 @@ class TerminalWidget(QTextEdit):
         self.alive = False
 
     def _on_data(self, text):
+        import time as _time
+        self._last_data_ts = _time.time()
         self._raw_buf = (self._raw_buf + text)[-self.RAW_LIMIT:]
         self.stream.feed(text)
         self._render_dirty = True
@@ -359,12 +297,10 @@ class TerminalWidget(QTextEdit):
     def _fire_startup(self):
         """Callback do timer de silencio (900ms sem dados novos).
 
-        Tres estagios:
+        Dois estagios:
         1. Sobe a CLI do agente na primeira vez. Quando agent_kind, prefixa `cls`
            pra limpar o welcome banner do shell antes do TUI do claude/gemini.
-        2. Marca como idle pra que o bus possa entregar mensagens.
-        3. Auto_reply: se pending_reply_to + bus_ref, captura resposta e envia
-           de volta ao emissor.
+        2. Marca como idle pra que UI/sidebar mostre o estado correto.
         """
         if not self.alive:
             return
@@ -383,36 +319,6 @@ class TerminalWidget(QTextEdit):
         if self.activity:
             self.activity = ""
             self.activity_changed.emit("")
-
-        # Stage 3: auto-responder
-        if self._pending_reply_to and self._bus_ref:
-            self._dispatch_reply()
-
-    def _dispatch_reply(self):
-        """Captura texto novo desde a injecao, filtra chrome do TUI e envia."""
-        try:
-            current = self._last_content
-            baseline = self._reply_baseline or ""
-            if current.startswith(baseline):
-                new_text = current[len(baseline):]
-            else:
-                new_text = "\n".join(current.splitlines()[-30:])
-
-            response = _clean_tui_response(new_text)
-            if response and self._bus_ref:
-                self._bus_ref.enqueue(self.node_id, self._pending_reply_to, response)
-        except Exception as e:
-            from .diagnostics import record_error
-            record_error("terminal._dispatch_reply", e)
-        finally:
-            self._pending_reply_to = None
-            self._reply_baseline   = ""
-
-    def set_auto_reply(self, enabled):
-        self.auto_reply = bool(enabled)
-        if not self.auto_reply:
-            self._pending_reply_to = None
-            self._reply_baseline   = ""
 
     def _flush_render(self):
         if self._render_dirty:
@@ -558,11 +464,6 @@ class TerminalWidget(QTextEdit):
             self._programmatic_scroll = False
 
         self._last_rows = all_rows
-        # _last_content e usado pelo auto_reply baseline em _dispatch_reply.
-        self._last_content = "\n".join(
-            "".join(text for text, _fg in runs).rstrip()
-            for runs in all_rows
-        )
 
     def _render_full(self, all_rows, default_fg):
         """Rebuild completo do QTextDocument — fallback quando o diff nao
@@ -628,6 +529,32 @@ class TerminalWidget(QTextEdit):
             # Startup do agente fica EXCLUSIVAMENTE no _fire_startup (com cls antes
             # do claude/gemini) — evita rodar sem cls quando o regex casa rapido.
 
+    def _paste(self, text):
+        """Cola texto no PTY com bracketed paste mode + chunked write.
+
+        Sem BPM, o `\\n -> \\r` antigo fazia cada quebra de linha virar Enter,
+        cortando paste multi-linha no primeiro `\\n`. BPM (`ESC[200~ ... ESC[201~`)
+        sinaliza ao app receptor (PSReadLine 2.2+, Claude Code, vim, readline)
+        que tudo entre os markers e texto literal — preserva as quebras como
+        newlines reais em vez de submit.
+
+        Chunked write evita truncar quando o paste excede o buffer do ConPTY.
+        """
+        line_count = max(1, text.replace("\r\n", "\n").count("\n") + 1)
+        self.activity = f"colou {line_count} linha{'s' if line_count != 1 else ''}"
+        self.activity_changed.emit(self.activity)
+
+        text = text.replace("\r\n", "\r").replace("\n", "\r")
+        payload = f"\x1b[200~{text}\x1b[201~"
+        chunk_size = 1024
+        for i in range(0, len(payload), chunk_size):
+            try:
+                self.pty.write(payload[i:i + chunk_size])
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("terminal._paste", e)
+                return
+
     def keyPressEvent(self, event):
         if not (self.pty and self.alive):
             return
@@ -649,8 +576,7 @@ class TerminalWidget(QTextEdit):
             if key == Qt.Key.Key_V:
                 clip = QApplication.clipboard().text()
                 if clip:
-                    clip = clip.replace("\r\n", "\r").replace("\n", "\r")
-                    self.pty.write(clip)
+                    self._paste(clip)
                 return
             if Qt.Key.Key_A.value <= key <= Qt.Key.Key_Z.value:
                 self.pty.write(chr(key - Qt.Key.Key_A.value + 1))
@@ -704,49 +630,6 @@ class TerminalWidget(QTextEdit):
             except Exception as e:
                 from .diagnostics import record_error
                 record_error("terminal.send", e)
-
-    def inject_message(self, message, from_node_id=None, from_name=None):
-        """Injeta mensagem no PTY como se digitada, separando texto e Enter.
-
-        TUIs como o claude code processam \\r imediatamente quando vem no mesmo
-        buffer que o texto — resultado: linha quebrada antes de submeter.
-        Dividindo em dois writes com delay garante que o TUI veja a mensagem
-        completa primeiro e SO ENTAO o Enter como submit.
-
-        Se from_name veio, prefixa "[de: <nome>] " pra destinatario identificar
-        emissor. Se auto_reply ativo, registra pending_reply_to + baseline.
-        """
-        if not (self.pty and self.alive):
-            return
-
-        if from_name:
-            text = f"[de: {from_name}] {message}"
-        else:
-            text = message
-
-        if self.auto_reply and from_node_id:
-            self._pending_reply_to = from_node_id
-            self._reply_baseline   = self._last_content
-
-        try:
-            self.activity = (text[:50] + "...") if len(text) > 50 else text
-            self.activity_changed.emit(self.activity)
-            self.pty.write(text)
-        except Exception as e:
-            from .diagnostics import record_error
-            record_error("terminal.inject_message", e)
-            return
-
-        # Enter separado apos delay — deixa o TUI processar a linha completa
-        QTimer.singleShot(150, self._inject_enter)
-
-    def _inject_enter(self):
-        if self.pty and self.alive:
-            try:
-                self.pty.write("\r")
-            except Exception as e:
-                from .diagnostics import record_error
-                record_error("terminal._inject_enter", e)
 
     def font_up(self):
         self._font_size = min(self._font_size + 1, 24)

@@ -68,6 +68,8 @@ class MainWindow(QMainWindow):
         # Spawn dinamico via /spawn — orquestrador cria novos agentes.
         # Signal cross-thread (HTTP -> UI) com QueuedConnection automatica.
         self.bus.spawn_requested.connect(self._on_spawn_requested)
+        # Badge de inbox no header: bus emite quando a fila pendente de um node muda.
+        self.bus.pending_changed.connect(self._on_pending_changed)
         if self._bus_enabled:
             self.bus.start(self.canvas)
         self.canvas._bus_ref = self.bus
@@ -182,11 +184,6 @@ class MainWindow(QMainWindow):
                 agent_kind    = node.get("agent_kind")
                 role_name     = node.get("role_name")
                 manifest_mode = node.get("manifest_mode", "existing")
-                # Default agora e True para terminals com agent_kind (orquestrador
-                # e agentes spawnados); sessoes antigas que ja salvaram explicitamente
-                # False respeitam isso.
-                default_auto_reply = bool(agent_kind)
-                auto_reply    = node.get("auto_reply", default_auto_reply)
 
                 self._terminal_counter += 1
                 t = self._make_terminal(
@@ -195,7 +192,6 @@ class MainWindow(QMainWindow):
                     manifest_mode=manifest_mode,
                 )
                 t._font_size = font_size
-                t.auto_reply = auto_reply
 
                 frame = self.canvas.add_node(t, name, size=(w, h), icon=icon)
                 self._register_terminal(t, frame, name)
@@ -296,6 +292,18 @@ class MainWindow(QMainWindow):
         self.sidebar.set_light_mode(light_mode)
         self.island.set_light_mode(light_mode)
         self._save_session_now()
+
+    def _on_pending_changed(self, node_id, count):
+        """Bus avisou que a fila pendente de um node mudou. Acha o frame
+        registrado e atualiza o badge. Idempotente — set_pending_count cuida
+        de mostrar/esconder conforme count."""
+        node = self.bus._nodes.get(node_id)
+        if not node or not node.frame:
+            return
+        try:
+            node.frame.header.set_pending_count(count)
+        except Exception as e:
+            record_error("main.pending_changed", e)
 
     def _on_spawn_requested(self, data):
         """Handler do signal bus.spawn_requested — cria o terminal pedido por
@@ -429,13 +437,14 @@ class MainWindow(QMainWindow):
         )
 
     def _wire_agent_controls(self, terminal, frame):
-        """Habilita botao auto-responder + injeta bus_ref pro reply funcionar."""
+        """Habilita botoes do header de um terminal de agente: badge inbox +
+        chain manual. O badge eh atualizado pelo bus via pending_changed; click
+        injeta literal `python -m termicanvas.cli inbox` no PTY (so o comando)."""
         if not terminal.agent_kind:
             return
-        terminal._bus_ref = self.bus
-        frame.header.show_auto_reply_btn()
-        frame.header.set_auto_reply_state(terminal.auto_reply)
-        frame.header.auto_reply_toggled.connect(terminal.set_auto_reply)
+        frame.header.inbox_clicked.connect(
+            lambda t=terminal: t.send("python -m termicanvas.cli inbox")
+        )
         # Botao de chain manual — agente entra em modo "criar corrente" e o
         # proximo node clicado vira filho.
         frame.header.show_chain_btn()

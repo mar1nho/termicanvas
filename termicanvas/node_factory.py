@@ -217,10 +217,6 @@ class NodeFactory:
             agent_kind=agent_kind, role_name=chosen_role,
             manifest_mode=chosen_mode,
         )
-        # Agentes nascem com auto-reply ON por default — pra que orquestrador
-        # e agentes spawnados respondam automaticamente sem o user precisar
-        # clicar no botao em cada um. Pode ser desligado depois no header.
-        t.auto_reply = True
         w, h = self._resolve_size(kind, geometry)
         frame = self.main.canvas.add_node(t, chosen_name, size=(w, h), icon=chosen_icon)
         self._apply_position(frame, geometry)

@@ -201,8 +201,10 @@ def _send_skill_instructions():
         "```\n"
         "python -m termicanvas.cli list\n"
         "```\n\n"
-        "Mensagens enviadas chegam ao destinatario quando ele estiver idle e nao\n"
-        "estiver em foco no canvas — entao nao espere resposta imediata.\n"
+        "Mensagens enviadas ficam no inbox do destinatario. O bus cutuca\n"
+        "automaticamente o terminal alvo a rodar `inbox` quando ele estiver\n"
+        "idle e sem foco. Resposta nao eh instantanea — depende do destinatario\n"
+        "processar e responder via `send`.\n"
     )
 
 
@@ -210,30 +212,52 @@ def spawn_response_instructions():
     """Bloco apendido automaticamente em TODO manifesto de agente spawnado
     via /spawn. Garante que o agente responda via bus em vez de escrever
     no PTY como se houvesse humano lendo."""
-    return """## Como responder mensagens (TermiCanvas)
+    return """## Como receber e responder mensagens (TermiCanvas)
 
-Voce esta rodando dentro do TermiCanvas. Mensagens chegam injetadas no seu PTY
-com prefixo `[de: <nome>]`. Quando isso acontecer:
+Voce esta rodando dentro do TermiCanvas. **Nao existe usuario humano lendo seu
+terminal** — apenas o orquestrador (e outros agentes via bus) se comunicam com
+voce. Tudo eh maquina-a-maquina.
 
-1. **Nao existe usuario humano lendo seu terminal.** Apenas o orquestrador
-   (e outros agentes via bus) se comunicam com voce. Tudo eh maquina-a-maquina.
-2. **Responda APENAS via send**, nunca escrevendo no chat:
-   ```
-   python -m termicanvas.cli send <node_id_origem> "[<seu_papel>] resposta..."
-   ```
-   - O `node_id` do emissor esta no prefixo da mensagem que voce recebeu
-   - Se nao tiver certeza, rode `python -m termicanvas.cli list` pra ver quem
-     enviou (procure pelo `name`)
-3. **Apos enviar, fique idle silenciosamente** — nao escreva mensagem final
-   resumindo o que fez. O orquestrador nao precisa de eco.
-4. **Prefixe suas respostas** com `[<seu_papel>]` (ex: `[Jira Expert]`) pra
-   o orquestrador identificar a origem.
-5. Tarefas que falham: avise via send antes de ficar idle.
+### Como mensagens chegam
 
-Comandos auxiliares disponiveis (todos pre-aprovados, sem prompt):
+Mensagens NAO sao injetadas no seu chat. Elas ficam num **inbox** no bus, e voce
+precisa rodar o comando abaixo pra consumir:
+
+```
+python -m termicanvas.cli inbox
+```
+
+O bus cutuca esse comando automaticamente no seu PTY quando voce esta idle e sem
+foco — basta rodar ele quando aparecer. Voce tambem pode rodar manualmente a
+qualquer momento. Cada GET consome (remove) as mensagens da fila.
+
+Formato de saida do `inbox` quando ha mensagens:
+```
+[msg_id] de <node_id_emissor>: <texto da mensagem>
+```
+
+Se aparecer `(inbox vazia)`, nao tem nada pra processar.
+
+### Como responder
+
+```
+python -m termicanvas.cli send <node_id_origem> "[<seu_papel>] resposta..."
+```
+
+- O `node_id` do emissor vem no prefixo `de <node_id>:` do `inbox`
+- Se nao tiver certeza, rode `python -m termicanvas.cli list` pra ver quem
+  enviou (procure pelo `name`)
+- **Prefixe suas respostas** com `[<seu_papel>]` (ex: `[Jira Expert]`) pra
+  o orquestrador identificar a origem
+- **Apos enviar, fique idle silenciosamente** — nao escreva mensagem final
+  resumindo o que fez. O orquestrador nao precisa de eco.
+- Tarefas que falham: avise via send antes de ficar idle.
+
+### Comandos auxiliares (todos pre-aprovados, sem prompt)
+
 - `python -m termicanvas.cli whoami` — seu node_id
 - `python -m termicanvas.cli list` — lista agentes ativos
-- `python -m termicanvas.cli inbox` — mensagens pendentes pra voce
+- `python -m termicanvas.cli inbox` — consome mensagens pendentes pra voce
 - `python -m termicanvas.cli status <msg_id>` — checa entrega
 """
 
@@ -380,6 +404,20 @@ um bloco "Como responder mensagens" no final, dizendo:
 
 A "etiqueta de comunicacao" o sistema injeta sozinho.
 
+### Como mensagens fluem (importante)
+
+Mensagens NAO sao injetadas no chat. Elas ficam num **inbox** no bus, e cada
+agente (inclusive voce) precisa rodar `inbox` pra consumir:
+
+```
+python -m termicanvas.cli inbox
+```
+
+O bus cutuca esse comando automaticamente no PTY de cada agente quando ele
+estiver idle e sem foco — basta rodar quando aparecer. Cada GET de inbox
+consome (remove) as mensagens da fila. O badge `📥 N` no header do node
+mostra quantas mensagens estao pendentes pra cada um (incluindo voce).
+
 ### Fluxo de orquestracao recomendado
 
 1. **Descoberta**: rode `list` pra ver quem esta ativo e qual o tipo (`shell`, `claude`, `gemini`)
@@ -387,17 +425,16 @@ A "etiqueta de comunicacao" o sistema injeta sozinho.
    executar isoladamente. De contexto suficiente em cada delegacao.
 3. **Delegacao**: use `send <node_id> "..."` pra cada agente. Mensagens curtas,
    focadas, com criterio de sucesso claro.
-4. **Monitor**: rode `inbox` periodicamente pra coletar respostas pendentes
-   (mensagens chegam ate voce do mesmo jeito que de qualquer outro agente).
+4. **Monitor**: rode `inbox` quando o bus cutucar voce (ou periodicamente)
+   pra coletar respostas dos agentes. Cada agente respondera via `send` e a
+   resposta vai cair no seu proprio inbox.
 5. **Agregacao**: consolide os retornos e responda ao usuario humano.
 
 ### Boas praticas
 
-- **Mensagens recebidas chegam injetadas como input do PTY** com prefixo
-  `[de: <nome>]`. Voce pode tratar como qualquer turn normal de conversa.
-- **Entrega e idle-aware**: o bus so injeta a mensagem quando o destinatario
-  esta idle E nao tem foco no canvas. Nao espere resposta instantanea.
-- **TTL de 5min**: mensagens nao entregues nesse periodo expiram. Reenvia se
+- **Mensagens chegam via inbox** — sempre via `python -m termicanvas.cli inbox`,
+  nunca diretamente como turn de conversa. Nao espere resposta instantanea.
+- **TTL de 5min**: mensagens nao consumidas nesse periodo expiram. Reenvia se
   necessario.
 - **Nao spame broadcast** — use direct send pra tarefas especificas.
 - **Identifique-se** quando pedir ajuda: assine mensagens com seu papel

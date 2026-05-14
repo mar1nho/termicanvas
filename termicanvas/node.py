@@ -72,7 +72,7 @@ class NodeHeader(QWidget):
     font_up_clicked   = pyqtSignal()
     font_down_clicked = pyqtSignal()
     edit_role_clicked  = pyqtSignal()
-    auto_reply_toggled = pyqtSignal(bool)
+    inbox_clicked      = pyqtSignal()
     chain_clicked      = pyqtSignal()
 
     def __init__(self, title, icon=""):
@@ -150,16 +150,17 @@ class NodeHeader(QWidget):
         self.role_btn.hide()
         layout.addWidget(self.role_btn)
 
-        self.auto_reply_btn = QPushButton()
-        self.auto_reply_btn.setIconSize(QSize(14, 14))
-        self.auto_reply_btn.setFixedSize(22, 22)
-        self.auto_reply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.auto_reply_btn.setCheckable(True)
-        self.auto_reply_btn.setToolTip("Auto-responder: quando ativo, captura a resposta apos receber\nmensagem do bus e envia automaticamente ao emissor")
-        self._update_auto_reply_btn_style()
-        self.auto_reply_btn.toggled.connect(self._on_auto_reply_toggled)
-        self.auto_reply_btn.hide()
-        layout.addWidget(self.auto_reply_btn)
+        self.inbox_btn = QPushButton("📥 0")
+        self.inbox_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.inbox_btn.setToolTip(
+            "Mensagens pendentes no inbox.\n"
+            "Clique pra cutucar o terminal a rodar `inbox` (so o comando).\n"
+            "Bus tambem cutuca automaticamente em terminais idle."
+        )
+        self._update_inbox_btn_style(0)
+        self.inbox_btn.clicked.connect(self.inbox_clicked.emit)
+        self.inbox_btn.hide()
+        layout.addWidget(self.inbox_btn)
 
         self.chain_btn = QPushButton()
         self.chain_btn.setIcon(get_icon("link", color=TEXT_MUTED, size=14))
@@ -215,37 +216,33 @@ class NodeHeader(QWidget):
     def show_role_btn(self):
         self.role_btn.show()
 
-    def show_auto_reply_btn(self):
-        self.auto_reply_btn.show()
+    def show_inbox_btn(self):
+        # Visivel apos primeira atualizacao; comeca mostrando "📥 0" so se count > 0.
+        # show_inbox_btn so habilita o fluxo — set_pending_count controla visibilidade.
+        pass
 
     def show_chain_btn(self):
         self.chain_btn.show()
 
-    def set_auto_reply_state(self, enabled):
-        # Bloqueia signal pra nao re-emitir ao restaurar de session
-        self.auto_reply_btn.blockSignals(True)
-        self.auto_reply_btn.setChecked(bool(enabled))
-        self.auto_reply_btn.blockSignals(False)
-        self._update_auto_reply_btn_style()
+    def set_pending_count(self, count):
+        """Atualiza badge. Esconde quando 0, mostra com numero quando > 0."""
+        count = max(0, int(count))
+        self.inbox_btn.setText(f"📥 {count}")
+        self._update_inbox_btn_style(count)
+        self.inbox_btn.setVisible(count > 0)
 
-    def _on_auto_reply_toggled(self, checked):
-        self._update_auto_reply_btn_style()
-        self.auto_reply_toggled.emit(checked)
-
-    def _update_auto_reply_btn_style(self):
-        on = self.auto_reply_btn.isChecked()
-        bg     = SUCCESS if on else "transparent"
-        icon_color = "white" if on else TEXT_MUTED
-        self.auto_reply_btn.setIcon(get_icon("reply", color=icon_color, size=14))
-        self.auto_reply_btn.setStyleSheet(f"""
+    def _update_inbox_btn_style(self, count):
+        bg     = ACCENT if count > 0 else "transparent"
+        color  = "white" if count > 0 else TEXT_MUTED
+        self.inbox_btn.setStyleSheet(f"""
             QPushButton {{
                 background: {bg};
-                border: none; border-radius: 2px;
-                padding: 0;
+                color: {color};
+                border: none; border-radius: 10px;
+                padding: 2px 8px;
+                font-size: 9pt; font-weight: 600;
             }}
-            QPushButton:hover {{ background: {BG_ELEVATED}; }}
-            QPushButton:checked {{ background: {SUCCESS}; }}
-            QPushButton:checked:hover {{ background: {SUCCESS}; }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; color: {TEXT_PRIMARY}; }}
         """)
 
     def _apply_style(self):
