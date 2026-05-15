@@ -311,7 +311,8 @@ class TerminalWidget(QTextEdit):
             if self.agent_kind:
                 shell = (self.shell or "").lower()
                 sep = "&&" if shell.startswith("cmd") else ";"
-                cmd = f"cls {sep} {self._startup_command}"
+                startup = self._startup_command_for_shell(shell)
+                cmd = f"cls {sep} {startup}"
             else:
                 cmd = self._startup_command
             self.send(cmd)
@@ -321,6 +322,29 @@ class TerminalWidget(QTextEdit):
         if self.activity:
             self.activity = ""
             self.activity_changed.emit("")
+
+    def _startup_command_for_shell(self, shell):
+        """Comando de agente adaptado ao shell atual.
+
+        CLIs instaladas via npm/fnm podem nao aparecer em PTYs novos. Quando
+        `fnm` existir, carregamos o ambiente antes de chamar claude/gemini/codex.
+        """
+        command = self._startup_command
+        if self.agent_kind not in ("claude", "gemini", "codex"):
+            return command
+
+        if (shell or "").startswith("cmd"):
+            return (
+                "(where fnm >nul 2>nul && "
+                "for /f \"tokens=*\" %i in ('fnm env --use-on-cd --shell cmd') do %i) "
+                f"& {command}"
+            )
+
+        return (
+            "if (Get-Command fnm -ErrorAction SilentlyContinue) "
+            "{ fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression }; "
+            f"{command}"
+        )
 
     def _flush_render(self):
         if self._render_dirty:

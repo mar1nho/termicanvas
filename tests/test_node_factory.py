@@ -70,3 +70,25 @@ def test_codex_uses_agents_manifest(tmp_path):
     assert promoted.exists()
     content = promoted.read_text(encoding="utf-8")
     assert ORCHESTRATOR_BEGIN in content
+
+
+def test_agent_startup_loads_fnm_for_powershell():
+    from types import SimpleNamespace
+    from termicanvas.terminal import TerminalWidget
+
+    terminal = SimpleNamespace(agent_kind="claude", _startup_command="claude")
+    command = TerminalWidget._startup_command_for_shell(terminal, "powershell.exe")
+
+    assert "fnm env --use-on-cd --shell powershell" in command
+    assert command.endswith("; claude")
+
+
+def test_agent_startup_loads_fnm_for_cmd():
+    from types import SimpleNamespace
+    from termicanvas.terminal import TerminalWidget
+
+    terminal = SimpleNamespace(agent_kind="claude", _startup_command="claude")
+    command = TerminalWidget._startup_command_for_shell(terminal, "cmd.exe")
+
+    assert "fnm env --use-on-cd --shell cmd" in command
+    assert command.endswith("& claude")

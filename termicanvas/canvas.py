@@ -395,7 +395,6 @@ class CanvasView(QGraphicsView):
         if self._chaining and self._chain_source is not None:
             src_proxy = next((p for p, f in self.proxies if f is self._chain_source), None)
             if src_proxy is not None:
-                from math import hypot
                 # Cria um rect virtual de 1x1 no cursor pra reusar _pick_chain_anchors.
                 src_rect = QRectF(
                     src_proxy.pos().x(), src_proxy.pos().y(),
@@ -558,6 +557,7 @@ class CanvasView(QGraphicsView):
             self._virtual_pos[proxy] = QPointF(proxy.pos())
         self._virtual_pos[proxy] += QPointF(delta.x() / scale, delta.y() / scale)
         proxy.setPos(self._virtual_pos[proxy])
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
 
     def _drag_end(self, proxy):
         """Snapa pra posicao mais proxima do grid — a menos que Alt esteja
@@ -567,6 +567,7 @@ class CanvasView(QGraphicsView):
             sx = round(virt.x() / self.GRID_STEP) * self.GRID_STEP
             sy = round(virt.y() / self.GRID_STEP) * self.GRID_STEP
             proxy.setPos(sx, sy)
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
 
     def _resize_frame(self, frame, proxy, delta):
         """Resize livre durante drag — snap acontece no _resize_end."""
@@ -578,6 +579,7 @@ class CanvasView(QGraphicsView):
         vh += delta.y() / scale
         self._virtual_size[frame] = (vw, vh)
         frame.resize(max(260, int(vw)), max(180, int(vh)))
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
 
     def _resize_end(self, frame):
         """Snapa o tamanho final pro grid — exceto se Alt segurado."""
@@ -587,6 +589,7 @@ class CanvasView(QGraphicsView):
             new_w = max(260, round(vw / self.GRID_STEP) * self.GRID_STEP)
             new_h = max(180, round(vh / self.GRID_STEP) * self.GRID_STEP)
             frame.resize(new_w, new_h)
+        self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.ForegroundLayer)
 
     def _alt_held(self):
         return bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier)
