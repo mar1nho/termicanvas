@@ -11,12 +11,12 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def test_island_has_eight_buttons(qt_app):
+def test_island_has_nine_buttons(qt_app):
     from termicanvas.island import ToolIsland
     island = ToolIsland()
-    assert len(island.buttons) == 8
+    assert len(island.buttons) == 9
     kinds = [b.kind for b in island.buttons]
-    assert kinds == ["powershell", "cmd", "claude", "gemini", "note", "prompt", "agent", "debug"]
+    assert kinds == ["powershell", "cmd", "claude", "codex", "gemini", "note", "prompt", "agent", "debug"]
 
 
 def test_click_emits_tool_armed_without_dialog(qt_app):
@@ -42,7 +42,7 @@ def test_double_click_emits_tool_doubled(qt_app):
     island = ToolIsland()
     doubled = []
     island.tool_doubled.connect(lambda k: doubled.append(k))
-    island.buttons[4]._emit_doubled()
+    island.buttons[5]._emit_doubled()
     assert doubled == ["note"]
 
 
@@ -50,7 +50,7 @@ def test_set_armed_kind_highlights_button(qt_app):
     from termicanvas.island import ToolIsland
     island = ToolIsland()
     island.set_armed_kind("note")
-    assert island.buttons[4].is_armed is True
+    assert island.buttons[5].is_armed is True
     assert all(not b.is_armed for b in island.buttons if b.kind != "note")
     island.set_armed_kind(None)
     assert all(not b.is_armed for b in island.buttons)

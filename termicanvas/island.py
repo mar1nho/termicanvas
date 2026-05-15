@@ -12,6 +12,7 @@ TOOLS = [
     ("powershell", "terminal_ps", "PowerShell", 0),
     ("cmd", "terminal_cmd", "CMD", 0),
     ("claude", "agent_claude", "Claude", 0),
+    ("codex", "agent_openai", "Codex", 0),
     ("gemini", "agent_gemini", "Gemini", 0),
     ("note", "edit", "Nota", 1),
     ("prompt", "clipboard", "Prompt", 1),

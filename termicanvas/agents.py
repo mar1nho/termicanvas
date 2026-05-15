@@ -1,11 +1,11 @@
-"""Specs de CLIs de agente (Claude Code, Gemini CLI) e helpers de roles.
+"""Specs de CLIs de agente (Claude Code, Gemini CLI, Codex CLI) e helpers de roles.
 
 Aplicacao de role
 =================
 
 Quando o user opta por "criar role gerenciado" no modal (so disponivel quando
 o cwd NAO tem manifesto), o TermiCanvas escreve o role direto em
-`<cwd>/CLAUDE.md` (ou `GEMINI.md`). O agente le esse arquivo no startup como
+`<cwd>/<manifesto_do_agente>`. O agente le esse arquivo no startup como
 qualquer projeto normal — sem injecao de mensagem, sem poluir o terminal.
 
 Pra distinguir um manifesto gerado pelo TermiCanvas de um do projeto, o
@@ -110,11 +110,18 @@ AGENT_KINDS = {
         "skills_dir": ".gemini/extensions",
         "icon":      "G",
     },
+    "codex": {
+        "label":     "Codex CLI",
+        "command":   "codex",
+        "manifest":  "AGENTS.md",
+        "skills_dir": ".codex/skills",
+        "icon":      "X",
+    },
 }
 
 
 def managed_manifest_path(cwd, agent_kind):
-    """Caminho do CLAUDE.md/GEMINI.md gerenciado pelo TermiCanvas no cwd."""
+    """Caminho do manifesto gerenciado pelo TermiCanvas no cwd."""
     if agent_kind not in AGENT_KINDS:
         return None
     return Path(cwd) / AGENT_KINDS[agent_kind]["manifest"]
@@ -124,8 +131,8 @@ def install_role(cwd, agent_kind, role_name, mode="managed", node_id=None):
     """Aplica role no projeto. Retorna o path do manifesto criado/atualizado.
 
     mode="existing": no-op. Agente usa o manifesto que ja existe (se existir).
-    mode="managed":  escreve role + skill instructions em `<cwd>/CLAUDE.md`
-                     (ou GEMINI.md). Sobrescreve apenas se o arquivo nao existir
+    mode="managed":  escreve role + skill instructions no manifesto do agente.
+                     Sobrescreve apenas se o arquivo nao existir
                      OU se ja foi gerado pelo TermiCanvas (tem TERMICANVAS_MARKER
                      na primeira linha). Nunca pisa em manifesto do projeto.
 
@@ -345,7 +352,7 @@ python -m termicanvas.cli spawn <kind> "<nome>"      # cria um novo agente no ca
 
 Voce pode invocar novos agentes durante a sessao. O TermiCanvas vai:
 1. Criar uma pasta isolada em `<seu_cwd>/.termicanvas/<slug_do_nome>/`
-2. Escrever um manifesto (CLAUDE.md/GEMINI.md) com o role_md que voce passar
+2. Escrever o manifesto do agente (CLAUDE.md, AGENTS.md ou GEMINI.md) com o role_md que voce passar
 3. Spawnar o terminal correspondente no canvas, posicionado abaixo do seu
 
 **Recomendado — use `--role-file`** (evita o limite de 965 bytes do parser
@@ -376,7 +383,7 @@ Roles curtos (< 900 bytes) podem ir via stdin:
 echo "# SQL Expert\nResponda perguntas SQL." | python -m termicanvas.cli spawn claude "SQL"
 ```
 
-Kinds suportados: `claude`, `gemini`, `powershell`, `cmd`. Apenas claude/gemini
+Kinds suportados: `claude`, `gemini`, `codex`, `powershell`, `cmd`. Apenas agentes
 recebem o role_md (PowerShell/CMD ignora).
 
 ### Permissoes pre-aprovadas
@@ -420,7 +427,7 @@ mostra quantas mensagens estao pendentes pra cada um (incluindo voce).
 
 ### Fluxo de orquestracao recomendado
 
-1. **Descoberta**: rode `list` pra ver quem esta ativo e qual o tipo (`shell`, `claude`, `gemini`)
+1. **Descoberta**: rode `list` pra ver quem esta ativo e qual o tipo (`shell`, `claude`, `gemini`, `codex`)
 2. **Plano**: divida a tarefa em sub-tarefas atomicas que cada agente pode
    executar isoladamente. De contexto suficiente em cada delegacao.
 3. **Delegacao**: use `send <node_id> "..."` pra cada agente. Mensagens curtas,

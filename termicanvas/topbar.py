@@ -1,6 +1,15 @@
 """TopBar: bus toggle and accent picker."""
 
-from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import (
+    QByteArray,
+    QEasingCurve,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import QColorDialog, QHBoxLayout, QPushButton, QWidget
@@ -25,14 +34,36 @@ class BusToggleButton(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._state = True
+        self._glow_intensity = 0.0
         self._on_renderer = QSvgRenderer(QByteArray(_BUS_ON_SVG), self)
         self._off_renderer = QSvgRenderer(QByteArray(_BUS_OFF_SVG), self)
+        self._anim = QPropertyAnimation(self, b"glow_intensity", self)
+        self._anim.setDuration(3000)
+        self._anim.setStartValue(0.0)
+        self._anim.setKeyValueAt(0.5, 1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._anim.setLoopCount(-1)
 
         self._refresh_tooltip()
+
+    def _get_glow_intensity(self):
+        return self._glow_intensity
+
+    def _set_glow_intensity(self, value):
+        self._glow_intensity = float(value)
+        self.update()
+
+    glow_intensity = pyqtProperty(float, _get_glow_intensity, _set_glow_intensity)
 
     def set_state(self, enabled: bool):
         self._state = bool(enabled)
         self._refresh_tooltip()
+        if self._state:
+            self._anim.stop()
+            self._glow_intensity = 0.0
+        elif self._anim.state() != QPropertyAnimation.State.Running:
+            self._anim.start()
         self.update()
 
     def _refresh_tooltip(self):
@@ -49,6 +80,11 @@ class BusToggleButton(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self._state:
+            alpha = int(28 + 70 * self._glow_intensity)
+            p.setBrush(QColor(214, 50, 50, alpha))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QRectF(self.rect()).adjusted(0, 0, 0, 0))
         renderer = self._on_renderer if self._state else self._off_renderer
         renderer.render(p, QRectF(self.rect()).adjusted(1, 1, -1, -1))
         p.end()

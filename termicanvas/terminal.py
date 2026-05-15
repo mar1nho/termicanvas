@@ -3,6 +3,7 @@
 import os
 import re
 import threading
+import time
 
 import pyte
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
@@ -74,7 +75,7 @@ from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from . import agents
-from .config import DEFAULT_CWD
+from .config import get_default_cwd
 from .tokens import ACCENT, BG_TERMINAL, BORDER, BORDER_HOVER, TEXT_PRIMARY
 
 try:
@@ -239,7 +240,7 @@ class TerminalWidget(QTextEdit):
     def _spawn(self):
         try:
             spawn_kwargs = {"dimensions": (self._pending_rows, self._pending_cols)}
-            target_cwd = self.cwd or DEFAULT_CWD
+            target_cwd = self.cwd or get_default_cwd()
             if target_cwd and os.path.isdir(target_cwd):
                 spawn_kwargs["cwd"] = target_cwd
 
@@ -281,8 +282,7 @@ class TerminalWidget(QTextEdit):
         self.alive = False
 
     def _on_data(self, text):
-        import time as _time
-        self._last_data_ts = _time.time()
+        self._last_data_ts = time.time()
         self._raw_buf = (self._raw_buf + text)[-self.RAW_LIMIT:]
         self.stream.feed(text)
         self._render_dirty = True
@@ -299,7 +299,7 @@ class TerminalWidget(QTextEdit):
 
         Dois estagios:
         1. Sobe a CLI do agente na primeira vez. Quando agent_kind, prefixa `cls`
-           pra limpar o welcome banner do shell antes do TUI do claude/gemini.
+           pra limpar o welcome banner do shell antes do TUI do agente.
         2. Marca como idle pra que UI/sidebar mostre o estado correto.
         """
         if not self.alive:
@@ -308,10 +308,12 @@ class TerminalWidget(QTextEdit):
         # Stage 1: sobe CLI do agente (com cls antes pra limpar o shell)
         if self._startup_command and not self._startup_sent:
             self._startup_sent = True
-            cmd = (
-                f"cls; {self._startup_command}"
-                if self.agent_kind else self._startup_command
-            )
+            if self.agent_kind:
+                shell = (self.shell or "").lower()
+                sep = "&&" if shell.startswith("cmd") else ";"
+                cmd = f"cls {sep} {self._startup_command}"
+            else:
+                cmd = self._startup_command
             self.send(cmd)
             return
 
@@ -527,7 +529,7 @@ class TerminalWidget(QTextEdit):
                 self.activity = ""
                 self.activity_changed.emit("")
             # Startup do agente fica EXCLUSIVAMENTE no _fire_startup (com cls antes
-            # do claude/gemini) — evita rodar sem cls quando o regex casa rapido.
+            # do agente) — evita rodar sem cls quando o regex casa rapido.
 
     def _paste(self, text):
         """Cola texto no PTY com bracketed paste mode + chunked write.
@@ -701,4 +703,13 @@ class TerminalWidget(QTextEdit):
                 self.pty.terminate(force=True)
             except Exception:
                 pass
+        self.pty = None
+        self._raw_buf = ""
+        self._last_rows = []
+        try:
+            self.bridge.data_received.disconnect(self._on_data)
+        except Exception:
+            pass
+        self.screen = None
+        self.stream = None
         self.deleteLater()

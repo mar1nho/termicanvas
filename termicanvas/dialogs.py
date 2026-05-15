@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .agents import AGENT_KINDS
-from .config import DEFAULT_CWD, get_last_custom_cwd
+from .config import get_default_cwd, get_last_custom_cwd
 from .roles import list_roles
 from .tokens import (
     ACCENT,
@@ -39,6 +39,7 @@ class TerminalLaunchDialog(QDialog):
     agent_kind=None        -> terminal puro (PowerShell/CMD)
     agent_kind="claude"    -> Claude Code interativo
     agent_kind="gemini"    -> Gemini CLI interativo
+    agent_kind="codex"     -> Codex CLI interativo
     """
 
     def __init__(self, shell_label, default_name="", parent=None, agent_kind=None):
@@ -58,7 +59,7 @@ class TerminalLaunchDialog(QDialog):
             QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
         """)
 
-        initial = get_last_custom_cwd() or DEFAULT_CWD
+        initial = get_last_custom_cwd() or get_default_cwd()
         self._chosen_cwd  = initial
         self._default_name = default_name
 
@@ -103,7 +104,16 @@ class TerminalLaunchDialog(QDialog):
         self._orchestrator_check   = None
         self._manifest_status      = None
         self._manifest_detected    = False  # atualizado em _refresh_manifest_status()
+        self.shell_combo           = None
         if is_agent:
+            layout.addSpacing(4)
+            layout.addWidget(self._caption("Shell:"))
+            self.shell_combo = QComboBox()
+            self.shell_combo.setStyleSheet(self._combo_style())
+            self.shell_combo.addItem("PowerShell", userData="powershell.exe")
+            self.shell_combo.addItem("CMD", userData="cmd.exe")
+            layout.addWidget(self.shell_combo)
+
             layout.addSpacing(4)
             self._manifest_status = QLabel("")
             self._manifest_status.setWordWrap(True)
@@ -139,7 +149,7 @@ class TerminalLaunchDialog(QDialog):
 
             # Checkbox de orquestrador — apende um system prompt ao manifesto
             # com instrucoes pra coordenar outros agentes via bus.
-            # Independente do checkbox de role (funciona ate com CLAUDE.md ja
+            # Independente do checkbox de role (funciona ate com manifesto ja
             # existente, porque so apende um bloco marcado no final).
             self._orchestrator_check = QCheckBox(
                 "Promover a Orquestrador (apende prompt de coordenacao no manifesto)"
@@ -152,7 +162,7 @@ class TerminalLaunchDialog(QDialog):
                 QCheckBox::indicator {{ width: 14px; height: 14px; }}
             """)
             self._orchestrator_check.setToolTip(
-                "Adiciona ao final do CLAUDE.md/GEMINI.md instrucoes sobre como "
+                "Adiciona ao final do manifesto do agente instrucoes sobre como "
                 "listar agentes, enviar mensagens, broadcast e consultar inbox."
             )
             layout.addWidget(self._orchestrator_check)
@@ -174,8 +184,8 @@ class TerminalLaunchDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        default_btn = self._ghost("Pasta padrao (dattos-ia)")
-        default_btn.clicked.connect(lambda: self._set_path(DEFAULT_CWD))
+        default_btn = self._ghost("Pasta padrao")
+        default_btn.clicked.connect(lambda: self._set_path(get_default_cwd()))
         row.addWidget(default_btn)
 
         browse_btn = self._ghost("Escolher outra...")
@@ -235,7 +245,7 @@ class TerminalLaunchDialog(QDialog):
         self.role_combo.setVisible(show)
 
     def _refresh_manifest_status(self):
-        """Atualiza UI do agente baseado em existencia de CLAUDE.md/GEMINI.md no cwd."""
+        """Atualiza UI do agente baseado em existencia de manifesto no cwd."""
         if not self._agent_kind or self._manifest_status is None:
             return
         manifest = AGENT_KINDS[self._agent_kind]["manifest"]
@@ -318,7 +328,7 @@ class TerminalLaunchDialog(QDialog):
         self._refresh_manifest_status()
 
     def _browse(self):
-        start = self._chosen_cwd if os.path.isdir(self._chosen_cwd) else DEFAULT_CWD
+        start = self._chosen_cwd if os.path.isdir(self._chosen_cwd) else get_default_cwd()
         p = QFileDialog.getExistingDirectory(
             self, "Escolha uma pasta", start,
             QFileDialog.Option.ShowDirsOnly,
@@ -336,6 +346,11 @@ class TerminalLaunchDialog(QDialog):
     def chosen_icon(self):
         return self.icon_input.text().strip()
 
+    def chosen_shell(self):
+        if self.shell_combo is None:
+            return None
+        return self.shell_combo.currentData() or "powershell.exe"
+
     def chosen_orchestrator(self):
         """True se o usuario marcou pra promover a orquestrador."""
         return bool(self._orchestrator_check and self._orchestrator_check.isChecked())
@@ -350,7 +365,7 @@ class TerminalLaunchDialog(QDialog):
         """Retorna 'existing' ou 'managed'.
 
         Regra:
-        - Se manifesto (CLAUDE.md/GEMINI.md) existe no cwd -> "existing" (sempre)
+        - Se manifesto existe no cwd -> "existing" (sempre)
         - Se nao existe E checkbox 'criar role' marcado -> "managed"
         - Caso contrario -> "existing"
         """
@@ -366,7 +381,7 @@ class RoleEditorDialog(QDialog):
 
     Le o conteudo de <cwd>/.termicanvas/role.md, permite editar e salva no mesmo
     arquivo. Mudancas tem efeito na proxima vez que o agente ler o manifesto
-    (basta reiniciar o claude/gemini ou pedir pra ele recarregar).
+    (basta reiniciar o agente ou pedir pra ele recarregar).
     """
 
     def __init__(self, role_path, parent=None):

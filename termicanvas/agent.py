@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .config import DEFAULT_CWD
+from .config import get_default_cwd
 from .tokens import (
     ACCENT,
     ACCENT_HOVER,
@@ -224,7 +224,7 @@ class AgentWidget(QWidget):
                 capture_output=True,
                 text=True,
                 timeout=120,
-                cwd=DEFAULT_CWD,
+                cwd=get_default_cwd(),
                 **kwargs,
             )
             response = result.stdout.strip() or result.stderr.strip() or "(sem resposta)"

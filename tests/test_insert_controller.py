@@ -105,7 +105,7 @@ def test_disarm_resets(qt_app):
 def test_canvas_insert_mode_activates_cursor(qt_app, monkeypatch, tmp_path):
     from termicanvas import session as session_mod, config as config_mod
     monkeypatch.setattr(session_mod, "SESSION_FILE", tmp_path / "session.json")
-    monkeypatch.setattr(config_mod, "DEFAULT_CWD", str(tmp_path))
+    config_mod.set_default_cwd(str(tmp_path))
     from main import MainWindow
     w = MainWindow()
     w.canvas.set_insert_active(True)
@@ -119,7 +119,7 @@ def test_canvas_insert_mode_activates_cursor(qt_app, monkeypatch, tmp_path):
 def test_drag_preview_snaps_to_grid(qt_app, monkeypatch, tmp_path):
     from termicanvas import session as session_mod, config as config_mod
     monkeypatch.setattr(session_mod, "SESSION_FILE", tmp_path / "session.json")
-    monkeypatch.setattr(config_mod, "DEFAULT_CWD", str(tmp_path))
+    config_mod.set_default_cwd(str(tmp_path))
     from main import MainWindow
     w = MainWindow()
     w.canvas.set_insert_active(True)

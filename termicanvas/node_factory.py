@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QDialog
 
 from .agent import AgentWidget
 from .agents import AGENT_KINDS, promote_to_orchestrator
-from .config import DEFAULT_CWD, set_last_custom_cwd
+from .config import get_default_cwd, set_last_custom_cwd
 from .dialogs import TerminalLaunchDialog
 from .widgets import NoteWidget, PromptCard
 
@@ -25,6 +25,7 @@ DEFAULT_SIZES = {
     "cmd":        (720, 460),
     "claude":     (820, 540),
     "gemini":     (820, 540),
+    "codex":      (820, 540),
     "note":       (340, 280),
     "prompt":     (420, 280),
     "agent":      (480, 580),
@@ -35,14 +36,16 @@ DEFAULT_SIZES = {
 SHELL_FOR_KIND = {
     "powershell": "powershell.exe",
     "cmd":        "cmd.exe",
-    "claude":     "powershell.exe",  # agent roda dentro de PS
+    "claude":     "powershell.exe",  # default; dialog permite CMD
     "gemini":     "powershell.exe",
+    "codex":      "powershell.exe",
 }
 
 # kind → agent_kind (None pra terminais simples)
 AGENT_FOR_KIND = {
     "claude": "claude",
     "gemini": "gemini",
+    "codex":  "codex",
 }
 
 
@@ -95,7 +98,7 @@ class NodeFactory:
         # Dispatch por categoria
         if kind in ("powershell", "cmd"):
             return self._create_terminal(kind, geometry, with_dialog, cwd=cwd, name=name)
-        if kind in ("claude", "gemini"):
+        if kind in AGENT_FOR_KIND:
             return self._create_agent_terminal(kind, geometry, with_dialog, cwd=cwd, name=name)
         if kind == "note":
             return self._create_simple(kind, NoteWidget(), "Nota", geometry)
@@ -117,7 +120,6 @@ class NodeFactory:
             from .monitor import DebugMonitorWidget
             widget = DebugMonitorWidget(canvas=self.main.canvas, bus=self.main.bus)
             return self._create_simple(kind, widget, "Debug Monitor", geometry, icon="")
-
         return None
 
     # ---------- helpers ----------
@@ -150,7 +152,7 @@ class NodeFactory:
         pretty = {"powershell": "PowerShell", "cmd": "CMD"}[kind]
         default_name = name or f"{pretty} {self.main._terminal_counter + 1}"
 
-        chosen_cwd  = cwd or DEFAULT_CWD
+        chosen_cwd  = cwd or get_default_cwd()
         chosen_name = default_name
         chosen_icon = ""
 
@@ -161,7 +163,7 @@ class NodeFactory:
             chosen_cwd  = dlg.chosen_cwd()
             chosen_name = dlg.chosen_name()
             chosen_icon = dlg.chosen_icon()
-            if chosen_cwd and chosen_cwd != DEFAULT_CWD:
+            if chosen_cwd and chosen_cwd != get_default_cwd():
                 set_last_custom_cwd(chosen_cwd)
 
         self.main._terminal_counter += 1
@@ -183,12 +185,13 @@ class NodeFactory:
         label = spec["label"]
         default_name = name or f"{label} {self.main._terminal_counter + 1}"
 
-        chosen_cwd  = cwd or DEFAULT_CWD
+        chosen_cwd  = cwd or get_default_cwd()
         chosen_name = default_name
         chosen_icon = spec.get("icon", "")
         chosen_role = None
         chosen_mode = "existing"
         chosen_orchestrator = False
+        chosen_shell = SHELL_FOR_KIND[kind]
 
         if with_dialog:
             dlg = TerminalLaunchDialog(
@@ -202,18 +205,19 @@ class NodeFactory:
             chosen_role = dlg.chosen_role()
             chosen_mode = dlg.chosen_manifest_mode()
             chosen_orchestrator = dlg.chosen_orchestrator()
-            if chosen_cwd and chosen_cwd != DEFAULT_CWD:
+            chosen_shell = dlg.chosen_shell() or chosen_shell
+            if chosen_cwd and chosen_cwd != get_default_cwd():
                 set_last_custom_cwd(chosen_cwd)
 
         # Apende o system prompt de orquestrador no manifesto, se solicitado.
-        # Independente do manifest_mode — funciona com CLAUDE.md ja existente
+        # Independente do manifest_mode: funciona com manifesto ja existente
         # tambem (apende como bloco delimitado pra ser idempotente).
         if chosen_orchestrator:
             promote_to_orchestrator(chosen_cwd, agent_kind)
 
         self.main._terminal_counter += 1
         t = self.main._make_terminal(
-            shell=SHELL_FOR_KIND[kind], cwd=chosen_cwd,
+            shell=chosen_shell, cwd=chosen_cwd,
             agent_kind=agent_kind, role_name=chosen_role,
             manifest_mode=chosen_mode,
         )

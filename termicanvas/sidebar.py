@@ -87,6 +87,8 @@ def _icon_for_widget(inner) -> str:
             return "agent_claude"
         if kind == "gemini":
             return "agent_gemini"
+        if kind == "codex":
+            return "agent_openai"
         # PowerShell e CMD distinguem pelo shell binario.
         if (inner.shell or "").lower().startswith("cmd"):
             return "terminal_cmd"

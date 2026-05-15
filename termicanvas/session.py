@@ -7,7 +7,7 @@ reuse a mesma logica sem duplicar codigo.
 import json
 
 from .agent import AgentWidget
-from .config import DEFAULT_CWD, SESSION_FILE
+from .config import SESSION_FILE, get_default_cwd
 from .terminal import TerminalWidget
 from .tokens import ACCENT
 from .widgets import NoteWidget, PromptCard
@@ -38,7 +38,7 @@ def serialize_canvas(canvas):
             base.update({
                 "type":          "terminal",
                 "shell":         frame.inner.shell,
-                "cwd":           frame.inner.cwd or DEFAULT_CWD,
+                "cwd":           frame.inner.cwd or get_default_cwd(),
                 "font_size":     frame.inner._font_size,
                 "agent_kind":    frame.inner.agent_kind,
                 "role_name":     frame.inner.role_name,
@@ -75,7 +75,7 @@ def serialize_canvas(canvas):
 
 
 def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warned=False,
-                 snapshot_load_warned=False, light_mode=False):
+                 snapshot_load_warned=False, light_mode=False, default_cwd=None):
     nodes, conns, chains = serialize_canvas(canvas)
     canvas_data = {
         "scale":                 canvas.transform().m11(),
@@ -86,12 +86,13 @@ def save_session(canvas, accent_color=ACCENT, bus_enabled=False, bus_toggle_warn
         "bus_toggle_warned":     bool(bus_toggle_warned),
         "snapshot_load_warned":  bool(snapshot_load_warned),
         "light_mode":            bool(light_mode),
+        "default_cwd":            default_cwd or get_default_cwd(),
     }
     data = {
-        "canvas":      canvas_data,
-        "nodes":       nodes,
-        "connections": conns,
-        "chains":      chains,
+        "canvas":        canvas_data,
+        "nodes":         nodes,
+        "connections":   conns,
+        "chains":        chains,
     }
     try:
         SESSION_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")

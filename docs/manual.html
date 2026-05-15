@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TermiCanvas Manual</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --text: #e8e8e8;
+      --muted: #a5adba;
+      --border: #2a2f3a;
+      --accent: #5a8dff;
+      --code: #10131a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 24px 18px;
+      border-right: 1px solid var(--border);
+      background: var(--panel);
+      overflow: auto;
+    }
+    nav h1 {
+      margin: 0 0 18px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    nav a {
+      display: block;
+      padding: 7px 0;
+      color: var(--muted);
+    }
+    main {
+      max-width: 980px;
+      padding: 40px 48px 80px;
+    }
+    section {
+      padding: 28px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { color: var(--muted); }
+    ul, ol { color: var(--muted); padding-left: 22px; }
+    code {
+      background: var(--code);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      color: var(--text);
+    }
+    pre {
+      overflow: auto;
+      background: var(--code);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px;
+    }
+    pre code {
+      border: 0;
+      padding: 0;
+      background: transparent;
+    }
+    .lead {
+      font-size: 18px;
+      color: #f3f4f6;
+      max-width: 760px;
+    }
+    @media (max-width: 760px) {
+      .layout { grid-template-columns: 1fr; }
+      nav {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      main { padding: 28px 22px 56px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <h1>TermiCanvas</h1>
+      <a href="#visao">Visao geral</a>
+      <a href="#canvas">Canvas</a>
+      <a href="#terminais">Terminais</a>
+      <a href="#agentes">Agentes</a>
+      <a href="#bus">Bus e CLI</a>
+      <a href="#orquestracao">Orquestracao</a>
+      <a href="#widgets">Widgets</a>
+      <a href="#snapshots">Snapshots</a>
+      <a href="#debug">Debug Monitor</a>
+    </nav>
+    <main>
+      <section id="visao">
+        <h2>Visao geral</h2>
+        <p class="lead">TermiCanvas organiza terminais e agentes CLI em um canvas visual para acompanhar execucoes, dividir trabalho e coordenar agentes locais.</p>
+        <pre><code>pip install -r requirements.txt
+python main.py</code></pre>
+      </section>
+
+      <section id="canvas">
+        <h2>Canvas</h2>
+        <p>Use o canvas para posicionar nodes como em um quadro infinito.</p>
+        <ul>
+          <li>Pan: botao do meio ou <code>Espaco</code> + arraste.</li>
+          <li>Zoom: <code>Ctrl</code> + roda.</li>
+          <li>Snap: grid de 40 px; segure <code>Alt</code> para movimento livre.</li>
+          <li>Atalhos: <code>Ctrl+T</code>, <code>Ctrl+W</code>, <code>Ctrl+Tab</code>, <code>Ctrl+Shift+D</code>.</li>
+        </ul>
+      </section>
+
+      <section id="terminais">
+        <h2>Terminais</h2>
+        <p>Crie PowerShell ou CMD pela Tool Island. O terminal usa PTY real, scrollback e resize responsivo.</p>
+        <ul>
+          <li><code>Ctrl+C</code> com selecao copia.</li>
+          <li><code>Ctrl+C</code> sem selecao interrompe o shell.</li>
+          <li><code>Ctrl+V</code> cola.</li>
+          <li><code>Shift</code> + roda navega pelo scrollback.</li>
+        </ul>
+      </section>
+
+      <section id="agentes">
+        <h2>Agentes</h2>
+        <p>Claude, Codex e Gemini rodam como CLIs dentro de terminais. No dialogo, escolha PowerShell ou CMD como shell base.</p>
+        <ul>
+          <li>Claude usa <code>CLAUDE.md</code>.</li>
+          <li>Codex usa <code>AGENTS.md</code>.</li>
+          <li>Gemini usa <code>GEMINI.md</code>.</li>
+        </ul>
+      </section>
+
+      <section id="bus">
+        <h2>Bus e CLI</h2>
+        <p>O bus local permite que agentes troquem mensagens por comandos Python.</p>
+        <pre><code>python -m termicanvas.cli list
+python -m termicanvas.cli send &lt;node_id&gt; "mensagem"
+python -m termicanvas.cli inbox
+python -m termicanvas.cli spawn codex "Builder" --role-file role.md</code></pre>
+      </section>
+
+      <section id="orquestracao">
+        <h2>Orquestracao</h2>
+        <p>Promova um agente a orquestrador para ele criar agentes filhos, delegar tarefas e acompanhar respostas via inbox.</p>
+        <p>Agentes criados por spawn recebem pasta isolada em <code>.termicanvas/&lt;slug&gt;/</code> e uma chain visual no canvas.</p>
+      </section>
+
+      <section id="widgets">
+        <h2>Widgets</h2>
+        <ul>
+          <li><strong>Nota:</strong> texto livre no canvas.</li>
+          <li><strong>Prompt Card:</strong> envia texto para outro node conectado.</li>
+          <li><strong>Agent Widget:</strong> chamada one-shot para perguntas rapidas.</li>
+        </ul>
+      </section>
+
+      <section id="snapshots">
+        <h2>Snapshots</h2>
+        <p>Snapshots salvam o estado do canvas em <code>~/.termicanvas/snapshots/</code>. Use <code>Ctrl+S</code> para salvar.</p>
+      </section>
+
+      <section id="debug">
+        <h2>Debug Monitor</h2>
+        <p>O Debug Monitor mostra RAM, CPU, timers, erros, threads, render times e metricas por terminal. Abra com <code>Ctrl+Shift+D</code>.</p>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -30,6 +30,8 @@ def _icon_for_inner(inner) -> str:
             return "agent_claude"
         if kind == "gemini":
             return "agent_gemini"
+        if kind == "codex":
+            return "agent_openai"
         if (inner.shell or "").lower().startswith("cmd"):
             return "terminal_cmd"
         return "terminal_ps"

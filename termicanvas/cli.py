@@ -120,7 +120,7 @@ def _cmd_spawn(bus_url, argv):
         print(
             "uso: python -m termicanvas.cli spawn <kind> \"<nome>\" "
             "[--parent-cwd <path>] [--role-file <path>]\n"
-            "    kind: claude | gemini | powershell | cmd\n"
+            "    kind: claude | gemini | codex | powershell | cmd\n"
             "    role_md vem de --role-file (preferido) ou stdin",
             file=sys.stderr,
         )

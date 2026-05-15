@@ -25,7 +25,12 @@ from termicanvas.agent import AgentWidget
 from termicanvas.agents import AGENT_KINDS, managed_manifest_path
 from termicanvas.bus import Bus
 from termicanvas.canvas import CanvasView
-from termicanvas.config import DEFAULT_CWD, ensure_dirs, set_last_custom_cwd
+from termicanvas.config import (
+    ensure_dirs,
+    get_default_cwd,
+    set_default_cwd,
+    set_last_custom_cwd,
+)
 from termicanvas.dialogs import (
     BusOffConfirmDialog,
     LoadSnapshotConfirmDialog,
@@ -59,6 +64,7 @@ class MainWindow(QMainWindow):
         # Read persisted state BEFORE starting bus / loading nodes.
         data = load_session() or {}
         cs = data.get("canvas", {})
+        set_default_cwd(cs.get("default_cwd") or get_default_cwd())
         self._bus_enabled         = bool(cs.get("bus_enabled", False))
         self._bus_toggle_warned   = bool(cs.get("bus_toggle_warned", False))
         self._snapshot_load_warned = bool(cs.get("snapshot_load_warned", False))
@@ -179,7 +185,7 @@ class MainWindow(QMainWindow):
 
             if ntype == "terminal":
                 shell         = node.get("shell", "powershell.exe")
-                cwd           = node.get("cwd", DEFAULT_CWD)
+                cwd           = node.get("cwd", get_default_cwd())
                 font_size     = node.get("font_size", 10)
                 agent_kind    = node.get("agent_kind")
                 role_name     = node.get("role_name")
@@ -208,7 +214,7 @@ class MainWindow(QMainWindow):
                 content = node.get("content", "")
                 n = NoteWidget()
                 n.setPlainText(content)
-                self.canvas.add_node(n, name, size=(w, h), icon=icon)
+                frame = self.canvas.add_node(n, name, size=(w, h), icon=icon)
 
             elif ntype == "agent":
                 a = AgentWidget()
@@ -224,7 +230,7 @@ class MainWindow(QMainWindow):
             elif ntype == "debug_monitor":
                 from termicanvas.monitor import DebugMonitorWidget
                 widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
-                self.canvas.add_node(widget, name, size=(w, h), icon=icon)
+                frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
 
             else:
                 continue
@@ -253,6 +259,7 @@ class MainWindow(QMainWindow):
         scroll_v = cs.get("scroll_v", 0)
         accent     = cs.get("accent_color", ACCENT)
         light_mode = cs.get("light_mode", False)
+        set_default_cwd(cs.get("default_cwd") or get_default_cwd())
 
         self.canvas.resetTransform()
         if abs(scale - 1.0) > 0.001:
@@ -317,7 +324,7 @@ class MainWindow(QMainWindow):
         kind = data.get("kind", "")
         name = (data.get("name") or "").strip()
         role_md = data.get("role_md", "")
-        parent_cwd = (data.get("parent_cwd") or "").strip() or DEFAULT_CWD
+        parent_cwd = (data.get("parent_cwd") or "").strip() or get_default_cwd()
         from_id = data.get("from", "")
 
         if not name:
@@ -337,7 +344,7 @@ class MainWindow(QMainWindow):
 
         # Escreve manifesto se for agente Claude/Gemini. SEMPRE escreve, mesmo
         # sem role_md — o default rico em build_spawned_manifest cobre.
-        if kind in ("claude", "gemini"):
+        if kind in AGENT_KINDS:
             from termicanvas.agents import (
                 AGENT_KINDS,
                 build_spawned_manifest,
@@ -428,7 +435,7 @@ class MainWindow(QMainWindow):
     def _wire_role_editor(self, terminal, frame):
         """Habilita botao 'editar role' no header de qualquer terminal de agente
         que tenha cwd. Antes era so 'managed', mas isso escondia o botao em
-        toda pasta que ja tinha CLAUDE.md/GEMINI.md (caso super comum)."""
+        toda pasta que ja tinha manifesto proprio (caso super comum)."""
         if not (terminal.agent_kind and terminal.cwd):
             return
         frame.header.show_role_btn()
@@ -622,6 +629,7 @@ class MainWindow(QMainWindow):
             bus_toggle_warned=self._bus_toggle_warned,
             snapshot_load_warned=self._snapshot_load_warned,
             light_mode=self.canvas.is_light_mode(),
+            default_cwd=get_default_cwd(),
         )
 
     # ---------- snapshots ----------
@@ -782,7 +790,7 @@ class MainWindow(QMainWindow):
         self._save_session_now()
         if self._bus_enabled:
             for proxy, frame in self.canvas.proxies:
-                if isinstance(frame.inner, TerminalWidget):
+                if hasattr(frame.inner, "shutdown"):
                     frame.inner.shutdown()
             try:
                 self.bus.stop()

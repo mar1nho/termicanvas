@@ -253,3 +253,25 @@ def test_session_persists_snapshot_load_warned(qt_app, tmp_path, monkeypatch):
     session_mod.save_session(canvas, "#5a8dff", snapshot_load_warned=True)
     data = json.loads(fake_path.read_text(encoding="utf-8"))
     assert data["canvas"]["snapshot_load_warned"] is True
+
+
+def test_session_persists_default_cwd(qt_app, tmp_path, monkeypatch):
+    from termicanvas import session as session_mod, config as config_mod
+    fake_path = tmp_path / "session.json"
+    monkeypatch.setattr(session_mod, "SESSION_FILE", fake_path)
+    config_mod.set_default_cwd(str(tmp_path))
+
+    canvas = MagicMock()
+    canvas.proxies = []
+    canvas.connections = []
+    class T:
+        def m11(self): return 1.0
+    canvas.transform = lambda: T()
+    class S:
+        def value(self): return 0
+    canvas.horizontalScrollBar = lambda: S()
+    canvas.verticalScrollBar = lambda: S()
+
+    session_mod.save_session(canvas, "#5a8dff")
+    data = json.loads(fake_path.read_text(encoding="utf-8"))
+    assert data["canvas"]["default_cwd"] == str(tmp_path)

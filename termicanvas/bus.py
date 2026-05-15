@@ -95,11 +95,20 @@ class Bus(QObject):
     def stop(self):
         self._tick.stop()
         if self._server:
+            server = self._server
+            thread = self._thread
             try:
-                self._server.shutdown()
+                server.shutdown()
             except Exception as e:
                 from .diagnostics import record_error
                 record_error("bus.stop.server_shutdown", e)
+            try:
+                server.server_close()
+            except Exception as e:
+                from .diagnostics import record_error
+                record_error("bus.stop.server_close", e)
+            if thread and thread.is_alive():
+                thread.join(timeout=1.0)
             self._server = None
             self._thread = None
             self._port   = None
@@ -295,7 +304,7 @@ class Bus(QObject):
 
             def _handle_spawn(self, data):
                 kind = data.get("kind", "")
-                if kind not in ("claude", "gemini", "powershell", "cmd"):
+                if kind not in ("claude", "gemini", "codex", "powershell", "cmd"):
                     self._json(400, {"error": f"invalid kind: {kind}"})
                     return
                 if not data.get("name"):
@@ -337,7 +346,7 @@ class Bus(QObject):
         """Tick periodico (250ms). Duas funcoes:
 
         1. TTL: descarta mensagens antigas demais ou pra nodes que sairam.
-        2. Auto-poke: pra terminais de agente (claude/gemini) com fila pendente,
+        2. Auto-poke: pra terminais de agente com fila pendente,
            injeta literal `python -m termicanvas.cli inbox\\r` no PTY apos
            POKE_IDLE_SECS de silencio E sem foco. SO o comando, nunca o payload.
            O agente roda o `inbox`, consome via GET, e o badge zera.

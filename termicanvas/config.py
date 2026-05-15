@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-DEFAULT_CWD  = r"C:\Users\usuario\Documents\Vault\dattos-ia"
+DEFAULT_CWD = str(Path.cwd())
 
 # Pastas em ~/.termicanvas (criadas em ensure_dirs())
 TERMICANVAS_HOME = Path.home() / ".termicanvas"
@@ -13,7 +13,18 @@ BUS_PORT_FILE    = TERMICANVAS_HOME / "bus.port"
 # Sessao continua na raiz do projeto (compat com session.json existente)
 SESSION_FILE = Path(__file__).resolve().parent.parent / "session.json"
 
+_default_cwd = DEFAULT_CWD
 _last_custom_cwd = None
+
+
+def get_default_cwd():
+    return _default_cwd
+
+
+def set_default_cwd(path):
+    global _default_cwd
+    if path:
+        _default_cwd = str(path)
 
 
 def get_last_custom_cwd():

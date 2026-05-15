@@ -23,7 +23,7 @@ import re
 import time
 from pathlib import Path
 
-from .config import SNAPSHOTS_DIR, ensure_dirs
+from .config import SNAPSHOTS_DIR, ensure_dirs, get_default_cwd
 from .tokens import ACCENT
 
 
@@ -113,10 +113,11 @@ def save_snapshot(display_name: str, canvas, accent_color: str = ACCENT,
             "accent_color": accent_color,
             "bus_enabled":  bool(bus_enabled),
             "light_mode":   bool(light_mode),
+            "default_cwd":   get_default_cwd(),
         },
-        "nodes":       nodes,
-        "connections": connections,
-        "chains":      chains,
+        "nodes":         nodes,
+        "connections":   connections,
+        "chains":        chains,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return file_name
@@ -174,5 +175,3 @@ def rename_snapshot(old_file_name: str, new_display_name: str) -> str | None:
     new_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     delete_snapshot(old_file_name)
     return new_file_name
-
-

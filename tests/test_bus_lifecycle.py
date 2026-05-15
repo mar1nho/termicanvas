@@ -66,3 +66,4 @@ def test_close_calls_unregister(qt_app, monkeypatch):
         f"expected exactly one unregister call with 'xyz789', got {unregister_calls}"
     )
     assert canvas.proxies == [], "proxy should be removed from canvas.proxies"
+

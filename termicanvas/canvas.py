@@ -1,5 +1,7 @@
 """CanvasView (infinito, zoom/pan) + CanvasNav (overlay de navegacao)."""
 
+from math import hypot
+
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
@@ -90,7 +92,6 @@ class CanvasView(QGraphicsView):
         self._chaining     = False
         self._chain_source = None
         self._chain_mouse  = QPointF(0, 0)
-
         # Per-drag virtual position/size state — keeps the unsnapped target
         # so the cursor can accumulate sub-grid motion without the node
         # getting stuck inside a single cell.
@@ -659,6 +660,9 @@ class CanvasView(QGraphicsView):
                 elif isinstance(inner, DebugMonitorWidget):
                     inner.shutdown()
                 self._scene.removeItem(proxy)
+                frame.deleteLater()
+                if hasattr(proxy, "deleteLater"):
+                    proxy.deleteLater()
                 del self.proxies[i]
                 if self.focused_frame is frame:
                     self.focused_frame = None
@@ -697,6 +701,9 @@ class CanvasView(QGraphicsView):
                     record_error("canvas.clear_all.monitor_shutdown", e)
             try:
                 self._scene.removeItem(proxy)
+                frame.deleteLater()
+                if hasattr(proxy, "deleteLater"):
+                    proxy.deleteLater()
             except Exception as e:
                 record_error("canvas.clear_all.scene_remove", e)
 
