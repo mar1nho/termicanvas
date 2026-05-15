@@ -131,6 +131,7 @@ class TerminalWidget(QTextEdit):
         manifest_mode="existing",
         env_extra=None,
         node_id=None,
+        owned_cwd=False,
     ):
         super().__init__()
         self.shell    = shell
@@ -141,6 +142,7 @@ class TerminalWidget(QTextEdit):
         self.manifest_mode = manifest_mode
         self.node_id      = node_id
         self.env_extra    = env_extra
+        self.owned_cwd    = bool(owned_cwd)
         self._startup_command = startup_command
         # Timestamp do ultimo byte recebido — usado pelo bus pra decidir
         # se o terminal esta idle o suficiente pra auto-poke do inbox.
@@ -150,6 +152,7 @@ class TerminalWidget(QTextEdit):
             self._startup_command = agents.startup_command(agent_kind)
         self._startup_sent    = False
         self._font_size = 10
+        self._light_mode = False
 
         font = QFont()
         font.setFamilies(["Cascadia Mono", "Consolas", "Courier New"])
@@ -157,28 +160,7 @@ class TerminalWidget(QTextEdit):
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
 
-        self.setStyleSheet(f"""
-            QTextEdit {{
-                background: {BG_TERMINAL};
-                color: {TEXT_PRIMARY};
-                border: none;
-                padding: 10px 12px;
-                selection-background-color: {ACCENT};
-            }}
-            QScrollBar:vertical {{
-                background: {BG_TERMINAL};
-                width: 10px;
-                margin: 0;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {BORDER};
-                border-radius: 4px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{ background: {BORDER_HOVER}; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
-        """)
+        self._apply_theme_style()
         self.setUndoRedoEnabled(False)
         self.setReadOnly(True)
         self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
@@ -371,7 +353,7 @@ class TerminalWidget(QTextEdit):
             text = row[:width].rstrip()
             if not text:
                 return []
-            return [(text, ANSI_COLORS["default"])]
+            return [(text, self._default_fg())]
 
         runs = []
         current_text = []
@@ -387,7 +369,7 @@ class TerminalWidget(QTextEdit):
                 ch = cell.data or " "
                 fg_name = (cell.fg or "default")
                 bold = bool(getattr(cell, "bold", False))
-            fg_hex = ANSI_COLORS.get(fg_name)
+            fg_hex = self._default_fg() if fg_name == "default" else ANSI_COLORS.get(fg_name)
             if fg_hex is None:
                 # cores diretas (hex sem #) que pyte às vezes devolve
                 if isinstance(fg_name, str) and len(fg_name) == 6:
@@ -395,9 +377,9 @@ class TerminalWidget(QTextEdit):
                         int(fg_name, 16)
                         fg_hex = "#" + fg_name
                     except ValueError:
-                        fg_hex = ANSI_COLORS["default"]
+                        fg_hex = self._default_fg()
                 else:
-                    fg_hex = ANSI_COLORS["default"]
+                    fg_hex = self._default_fg()
             if bold and fg_name in _BASE_COLOR_NAMES:
                 fg_hex = ANSI_COLORS.get(f"bright{fg_name}", fg_hex)
             if fg_hex != current_fg:
@@ -470,7 +452,7 @@ class TerminalWidget(QTextEdit):
         try:
             self.setUpdatesEnabled(False)
             try:
-                default_fg = ANSI_COLORS["default"]
+                default_fg = self._default_fg()
                 if use_incremental:
                     self._render_incremental(all_rows, first_changed, default_fg)
                 else:
@@ -672,6 +654,58 @@ class TerminalWidget(QTextEdit):
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
         QTimer.singleShot(0, self._schedule_resize)
+
+    def set_light_mode(self, enabled: bool):
+        self._light_mode = bool(enabled)
+        self._apply_theme_style()
+        self._last_rows = []
+        self._render_dirty = True
+        self._render()
+
+    def _theme_colors(self):
+        if self._light_mode:
+            return {
+                "bg": "#ffffff",
+                "fg": "#111111",
+                "scroll": "#eeeeee",
+                "handle": "#c7c7c7",
+                "handle_hover": "#9f9f9f",
+            }
+        return {
+            "bg": BG_TERMINAL,
+            "fg": TEXT_PRIMARY,
+            "scroll": BG_TERMINAL,
+            "handle": BORDER,
+            "handle_hover": BORDER_HOVER,
+        }
+
+    def _default_fg(self):
+        return "#111111" if self._light_mode else ANSI_COLORS["default"]
+
+    def _apply_theme_style(self):
+        colors = self._theme_colors()
+        self.setStyleSheet(f"""
+            QTextEdit {{
+                background: {colors["bg"]};
+                color: {colors["fg"]};
+                border: none;
+                padding: 10px 12px;
+                selection-background-color: {ACCENT};
+            }}
+            QScrollBar:vertical {{
+                background: {colors["scroll"]};
+                width: 10px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {colors["handle"]};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {colors["handle_hover"]}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

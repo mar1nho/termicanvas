@@ -275,3 +275,37 @@ def test_session_persists_default_cwd(qt_app, tmp_path, monkeypatch):
     session_mod.save_session(canvas, "#5a8dff")
     data = json.loads(fake_path.read_text(encoding="utf-8"))
     assert data["canvas"]["default_cwd"] == str(tmp_path)
+
+
+def test_serialize_preview_node(qt_app, tmp_path):
+    from termicanvas.preview import PreviewWidget
+    from termicanvas.session import serialize_canvas
+
+    preview_path = tmp_path / "note.md"
+    preview_path.write_text("# Titulo\n", encoding="utf-8")
+
+    widget = PreviewWidget(path=str(preview_path), mode="markdown")
+    frame = MagicMock()
+    frame.inner = widget
+    frame.header.title.text.return_value = "note.md"
+    frame.icon_text.return_value = ""
+    frame.width.return_value = 640
+    frame.height.return_value = 520
+
+    proxy = MagicMock()
+    proxy.pos.return_value.x.return_value = 10
+    proxy.pos.return_value.y.return_value = 20
+
+    canvas = MagicMock()
+    canvas.proxies = [(proxy, frame)]
+    canvas.connections = []
+    canvas.chains = []
+
+    nodes, connections, chains = serialize_canvas(canvas)
+
+    assert connections == []
+    assert chains == []
+    assert nodes[0]["type"] == "preview"
+    assert nodes[0]["path"] == str(preview_path)
+    assert nodes[0]["mode"] == "markdown"
+    assert nodes[0]["compacted"] is False

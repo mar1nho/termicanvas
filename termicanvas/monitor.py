@@ -25,6 +25,7 @@ from .tokens import (
     BORDER,
     TEXT_MUTED,
     TEXT_PRIMARY,
+    theme_palette,
 )
 
 
@@ -437,11 +438,9 @@ class DebugMonitorWidget(QWidget):
         self._collector = MetricsCollector(canvas, bus)
         self._collector.snapshot_ready.connect(self._on_snapshot)
         self._latest_snapshot: Optional[MetricsSnapshot] = None
+        self._light_mode = False
 
-        self.setStyleSheet(f"""
-            QWidget {{ background: {BG_SURFACE}; color: {TEXT_PRIMARY}; }}
-            QLabel {{ background: transparent; }}
-        """)
+        self._apply_theme()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
@@ -626,6 +625,19 @@ class DebugMonitorWidget(QWidget):
         layout.addWidget(self._threads_view, 1)
 
         self._tabs.addTab(page, "Threads")
+
+    # ---------- theme ----------
+
+    def _apply_theme(self):
+        pal = theme_palette(self._light_mode)
+        self.setStyleSheet(f"""
+            QWidget {{ background: {pal["bg_surface"]}; color: {pal["text_primary"]}; }}
+            QLabel {{ background: transparent; }}
+        """)
+
+    def set_light_mode(self, enabled: bool):
+        self._light_mode = bool(enabled)
+        self._apply_theme()
 
     # ---------- update slots ----------
 

@@ -23,6 +23,7 @@ from .agent import AgentWidget
 from .icons import get_icon
 from .node import NodeFrame
 from .terminal import TerminalWidget
+from .preview import PreviewWidget
 from .tokens import (
     ACCENT,
     BG_CANVAS,
@@ -365,13 +366,14 @@ class CanvasView(QGraphicsView):
                 break
             perp_offset += 50  # empurra mais pra fora a cada iteracao
 
-        # Estilo igual da referencia: tracejado fino e sutil.
+        # Tracejado dos spawns — mais grosso e mais opaco pra ficar visivel
+        # contra o grid e os outros nodes (era 1.5/alpha 150-170, ficava ghost).
         if self._light_mode:
-            line_color = QColor(80, 80, 80, 170)
+            line_color = QColor(60, 60, 60, 235)
         else:
-            line_color = QColor(200, 200, 200, 150)
-        pen = QPen(line_color, 1.5)
-        pen.setDashPattern([4.0, 4.0])
+            line_color = QColor(220, 220, 220, 220)
+        pen = QPen(line_color, 2.6)
+        pen.setDashPattern([4.5, 3.5])
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -410,9 +412,9 @@ class CanvasView(QGraphicsView):
                 ctrl2 = self._offset_in_direction(p2, dir2, base_offset)
                 path = QPainterPath(p1)
                 path.cubicTo(ctrl1, ctrl2, p2)
-                line_color = QColor(80, 80, 80, 170) if self._light_mode else QColor(200, 200, 200, 150)
-                pen = QPen(line_color, 1.5)
-                pen.setDashPattern([4.0, 4.0])
+                line_color = QColor(60, 60, 60, 235) if self._light_mode else QColor(220, 220, 220, 220)
+                pen = QPen(line_color, 2.6)
+                pen.setDashPattern([4.5, 3.5])
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -540,6 +542,11 @@ class CanvasView(QGraphicsView):
             frame.header.show_font_controls()
             frame.header.font_up_clicked.connect(inner_widget.font_up)
             frame.header.font_down_clicked.connect(inner_widget.font_down)
+            if self._terminal_workspace_path(inner_widget) is not None:
+                frame.header.show_purge_btn()
+                frame.header.purge_clicked.connect(lambda f=frame: self._purge_workspace(f))
+        if isinstance(inner_widget, PreviewWidget):
+            frame.set_compactable(True)
 
         self.proxies.append((proxy, frame))
         self._focus(frame)
@@ -662,6 +669,8 @@ class CanvasView(QGraphicsView):
                     inner.shutdown()
                 elif isinstance(inner, DebugMonitorWidget):
                     inner.shutdown()
+                elif hasattr(inner, "shutdown"):
+                    inner.shutdown()
                 self._scene.removeItem(proxy)
                 frame.deleteLater()
                 if hasattr(proxy, "deleteLater"):
@@ -673,6 +682,91 @@ class CanvasView(QGraphicsView):
         self.connections = [(s, t) for s, t in self.connections if s is not frame and t is not frame]
         self.chains = [(p, c) for p, c in self.chains if p is not frame and c is not frame]
         self.nodes_changed.emit()
+
+    @staticmethod
+    def _terminal_owned_workspace_path(terminal):
+        """Retorna o cwd expurgavel, se ele for workspace gerenciado.
+
+        A regra e deliberadamente restrita: apenas terminais marcados como
+        owned_cwd e cujo cwd seja filho direto de uma pasta `.termicanvas`.
+        Isso cobre spawns automaticos e evita apagar projetos escolhidos
+        manualmente pelo usuario.
+        """
+        if not getattr(terminal, "owned_cwd", False):
+            return None
+        cwd = getattr(terminal, "cwd", None)
+        if not cwd:
+            return None
+        try:
+            from pathlib import Path
+            path = Path(cwd).expanduser().resolve(strict=False)
+        except Exception:
+            return None
+        if not path.name or path.parent.name != ".termicanvas":
+            return None
+        return path
+
+    @staticmethod
+    def _terminal_workspace_path(terminal):
+        cwd = getattr(terminal, "cwd", None)
+        if not cwd:
+            return None
+        try:
+            from pathlib import Path
+            path = Path(cwd).expanduser().resolve(strict=False)
+        except Exception:
+            return None
+        if not path.name or path.parent == path:
+            return None
+        return path
+
+    def _purge_workspace(self, frame):
+        import shutil
+
+        from PyQt6.QtWidgets import QMessageBox
+
+        if frame is None or not isinstance(frame.inner, TerminalWidget):
+            return
+        target = self._terminal_workspace_path(frame.inner)
+        if target is None:
+            QMessageBox.warning(
+                self,
+                "Expurgar",
+                "Este terminal nao tem um diretorio de trabalho expurgavel.",
+            )
+            return
+
+        owned = self._terminal_owned_workspace_path(frame.inner) is not None
+        if owned:
+            message = (
+                "Isto vai fechar o terminal e apagar permanentemente o workspace gerenciado:\n\n"
+                f"{target}\n\nContinuar?"
+            )
+        else:
+            message = (
+                "Este terminal nao foi criado em um workspace isolado do TermiCanvas.\n\n"
+                "Isto vai fechar o terminal e apagar permanentemente TODO o diretorio de trabalho:\n\n"
+                f"{target}\n\nContinuar?"
+            )
+
+        ans = QMessageBox.warning(
+            self,
+            "Expurgar workspace",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+
+        self._close(frame)
+        try:
+            if target.exists():
+                shutil.rmtree(target)
+        except Exception as e:
+            from .diagnostics import record_error
+            record_error("canvas.purge_workspace", e)
+            QMessageBox.warning(self, "Expurgar", f"Falhou ao apagar a pasta:\n{e}")
 
     def clear_all(self, bus=None):
         """Fecha todos os nodes do canvas.
@@ -702,6 +796,11 @@ class CanvasView(QGraphicsView):
                     inner.shutdown()
                 except Exception as e:
                     record_error("canvas.clear_all.monitor_shutdown", e)
+            elif hasattr(inner, "shutdown"):
+                try:
+                    inner.shutdown()
+                except Exception as e:
+                    record_error("canvas.clear_all.widget_shutdown", e)
             try:
                 self._scene.removeItem(proxy)
                 frame.deleteLater()
@@ -724,6 +823,19 @@ class CanvasView(QGraphicsView):
                 self._focus(frame)
                 self.centerOn(proxy)
                 break
+
+    def move_frame_in_order(self, frame, delta: int):
+        if frame is None or not delta:
+            return
+        idx = next((i for i, (_p, f) in enumerate(self.proxies) if f is frame), None)
+        if idx is None:
+            return
+        new_idx = max(0, min(len(self.proxies) - 1, idx + delta))
+        if new_idx == idx:
+            return
+        item = self.proxies.pop(idx)
+        self.proxies.insert(new_idx, item)
+        self.nodes_changed.emit()
 
     def wheelEvent(self, event):
         view_pos = event.position().toPoint()

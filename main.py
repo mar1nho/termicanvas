@@ -37,11 +37,13 @@ from termicanvas.dialogs import (
     RoleEditorDialog,
     SnapshotNameDialog,
     TerminalLaunchDialog,
+    UnifiedLaunchDialog,
 )
 from termicanvas.diagnostics import record_error
 from termicanvas.insert_controller import InsertController, InsertState
-from termicanvas.island import ToolIsland
+from termicanvas.island import LauncherIsland, ToolIsland
 from termicanvas.node_factory import NodeFactory
+from termicanvas.preview import PreviewWidget
 from termicanvas.roles import seed_roles
 from termicanvas.session import load_session, save_session
 from termicanvas.sidebar import TerminalsSidebar
@@ -93,14 +95,18 @@ class MainWindow(QMainWindow):
 
         # Tool Island (overlay no canvas) + InsertController (state machine)
         self.island = ToolIsland(parent=self.canvas)
+        self.launcher = LauncherIsland(parent=self.canvas)
         self._island_manual_position = False
+        self._launcher_manual_position = False
         self.insert = InsertController(parent=self)
 
-        self.island.tool_armed.connect(self.insert.arm)
+        self.launcher.tool_armed.connect(self._on_tool_armed)
+        self.island.tool_armed.connect(self._on_tool_armed)
         self.island.tool_doubled.connect(
             lambda kind: self.factory.create(kind, with_dialog=False)
         )
         self.island.user_moved.connect(self._on_island_user_moved)
+        self.launcher.user_moved.connect(self._on_launcher_user_moved)
         self.canvas.island_center_requested.connect(self._center_island)
         self.insert.armed_kind_changed.connect(self.island.set_armed_kind)
         self.insert.state_changed.connect(self._on_insert_state_changed)
@@ -142,6 +148,7 @@ class MainWindow(QMainWindow):
 
         self.last_terminal     = None
         self._terminal_counter = 0
+        self._pending_launch_options = None
 
         # Reflect the persisted bus state on the topbar.
         self.topbar.set_bus_state(self._bus_enabled)
@@ -190,12 +197,14 @@ class MainWindow(QMainWindow):
                 agent_kind    = node.get("agent_kind")
                 role_name     = node.get("role_name")
                 manifest_mode = node.get("manifest_mode", "existing")
+                owned_cwd     = bool(node.get("owned_cwd", False))
 
                 self._terminal_counter += 1
                 t = self._make_terminal(
                     shell=shell, cwd=cwd,
                     agent_kind=agent_kind, role_name=role_name,
                     manifest_mode=manifest_mode,
+                    owned_cwd=owned_cwd,
                 )
                 t._font_size = font_size
 
@@ -232,6 +241,13 @@ class MainWindow(QMainWindow):
                 widget = DebugMonitorWidget(canvas=self.canvas, bus=self.bus)
                 frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
 
+            elif ntype == "preview":
+                widget = PreviewWidget(
+                    path=node.get("path", ""),
+                    mode=node.get("mode", "auto"),
+                )
+                frame = self.canvas.add_node(widget, name, size=(w, h), icon=icon)
+
             else:
                 continue
 
@@ -239,6 +255,8 @@ class MainWindow(QMainWindow):
                 if f is frame:
                     proxy.setPos(x, y)
                     break
+            if node.get("compacted") and hasattr(frame, "set_compacted"):
+                frame.set_compacted(True)
 
         frame_list = [f for _, f in self.canvas.proxies]
         for src_idx, tgt_idx in data.get("connections", []):
@@ -279,6 +297,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_light_mode(light_mode)
         self.sidebar.set_light_mode(light_mode)
         self.island.set_light_mode(light_mode)
+        self.launcher.set_light_mode(light_mode)
 
     # ---------- helpers ----------
 
@@ -298,6 +317,7 @@ class MainWindow(QMainWindow):
         self.canvas.set_light_mode(light_mode)
         self.sidebar.set_light_mode(light_mode)
         self.island.set_light_mode(light_mode)
+        self.launcher.set_light_mode(light_mode)
         self._save_session_now()
 
     def _on_pending_changed(self, node_id, count):
@@ -346,7 +366,6 @@ class MainWindow(QMainWindow):
         # sem role_md — o default rico em build_spawned_manifest cobre.
         if kind in AGENT_KINDS:
             from termicanvas.agents import (
-                AGENT_KINDS,
                 build_spawned_manifest,
                 install_termicanvas_permissions,
             )
@@ -391,6 +410,7 @@ class MainWindow(QMainWindow):
                 kind, with_dialog=False,
                 cwd=str(agent_dir), name=name,
                 geometry=geometry,
+                owned_cwd=True,
             )
         except Exception as e:
             record_error("main.spawn.factory", e)
@@ -403,7 +423,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 record_error("main.spawn.chain", e)
 
-    def _make_terminal(self, shell, cwd, agent_kind=None, role_name=None, manifest_mode="existing"):
+    def _make_terminal(self, shell, cwd, agent_kind=None, role_name=None,
+                       manifest_mode="existing", owned_cwd=False):
         """Cria TerminalWidget com env_extra contendo URL do bus + node_id reservado."""
         reserved_id = uuid.uuid4().hex[:12]
         env_extra = {}
@@ -423,6 +444,7 @@ class MainWindow(QMainWindow):
             agent_kind=agent_kind, role_name=role_name,
             manifest_mode=manifest_mode,
             env_extra=env_extra, node_id=reserved_id,
+            owned_cwd=owned_cwd,
         )
         return t
 
@@ -505,6 +527,23 @@ class MainWindow(QMainWindow):
 
     # ---------- insert mode (drag-to-create) ----------
 
+    def _on_tool_armed(self, kind, with_dialog):
+        if kind == "launcher":
+            dlg = UnifiedLaunchDialog(parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                self.insert.disarm()
+                return
+            options = dlg.launch_options()
+            if options.get("set_default_cwd") and options.get("cwd"):
+                set_default_cwd(options["cwd"])
+            if options.get("cwd") and options["cwd"] != get_default_cwd():
+                set_last_custom_cwd(options["cwd"])
+            self._pending_launch_options = options
+            self.insert.arm(options["kind"], with_dialog=False)
+            return
+        self._pending_launch_options = None
+        self.insert.arm(kind, with_dialog)
+
     def _on_insert_state_changed(self, state):
         active = state in (InsertState.ARMED, InsertState.DRAGGING)
         self.canvas.set_insert_active(active)
@@ -514,15 +553,34 @@ class MainWindow(QMainWindow):
     def _on_insert_commit(self, kind, scene_rect, with_dialog):
         # Snap rect ao grid antes de criar (mesmo grid usado no preview).
         snapped = self.canvas._snap_rect(scene_rect)
-        self.factory.create(kind, geometry=snapped, with_dialog=with_dialog)
+        options = self._pending_launch_options if self._pending_launch_options else {}
+        if options and options.get("kind") != kind:
+            options = {}
+        self.factory.create(
+            kind,
+            geometry=snapped,
+            with_dialog=with_dialog,
+            cwd=options.get("cwd"),
+            name=options.get("name"),
+            shell=options.get("shell"),
+            role_name=options.get("role_name"),
+            manifest_mode=options.get("manifest_mode"),
+            orchestrator=bool(options.get("orchestrator", False)),
+        )
+        self._pending_launch_options = None
         self.canvas.clear_drag_preview()
 
     def _on_island_user_moved(self):
         self._island_manual_position = True
 
+    def _on_launcher_user_moved(self):
+        self._launcher_manual_position = True
+
     def _center_island(self):
         self._island_manual_position = False
+        self._launcher_manual_position = False
         self._reposition_island(force=True)
+        self._reposition_launcher(force=True)
 
     def _reposition_island(self, force=False):
         if not hasattr(self, "island"):
@@ -538,6 +596,17 @@ class MainWindow(QMainWindow):
         self.island.setGeometry(x, y, iw, ih)
         self.island.raise_()
 
+    def _reposition_launcher(self, force=False):
+        if not hasattr(self, "launcher"):
+            return
+        if self._launcher_manual_position and not force:
+            return
+        margin = 12
+        x = margin
+        y = margin
+        self.launcher.setGeometry(x, y, self.launcher.width(), self.launcher.height())
+        self.launcher.raise_()
+
     def _reposition_topbar_overlay(self):
         if not hasattr(self, "topbar"):
             return
@@ -548,6 +617,7 @@ class MainWindow(QMainWindow):
         self.topbar.raise_()
 
     def _reposition_overlays(self):
+        self._reposition_launcher()
         self._reposition_island()
         self._reposition_topbar_overlay()
 
@@ -788,10 +858,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self._save_session_now()
+        self.canvas.clear_all(bus=self.bus)
         if self._bus_enabled:
-            for proxy, frame in self.canvas.proxies:
-                if hasattr(frame.inner, "shutdown"):
-                    frame.inner.shutdown()
             try:
                 self.bus.stop()
             except Exception:

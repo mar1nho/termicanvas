@@ -8,6 +8,7 @@ import json
 
 from .agent import AgentWidget
 from .config import SESSION_FILE, get_default_cwd
+from .preview import PreviewWidget
 from .terminal import TerminalWidget
 from .tokens import ACCENT
 from .widgets import NoteWidget, PromptCard
@@ -33,6 +34,7 @@ def serialize_canvas(canvas):
             "y":    pos.y(),
             "w":    frame.width(),
             "h":    frame.height(),
+            "compacted": getattr(frame, "_compacted", False) is True,
         }
         if isinstance(frame.inner, TerminalWidget):
             base.update({
@@ -43,6 +45,7 @@ def serialize_canvas(canvas):
                 "agent_kind":    frame.inner.agent_kind,
                 "role_name":     frame.inner.role_name,
                 "manifest_mode": frame.inner.manifest_mode,
+                "owned_cwd":     bool(getattr(frame.inner, "owned_cwd", False)),
             })
         elif isinstance(frame.inner, NoteWidget):
             base.update({"type": "note", "content": frame.inner.toPlainText()})
@@ -50,6 +53,12 @@ def serialize_canvas(canvas):
             base.update({"type": "agent"})
         elif isinstance(frame.inner, PromptCard):
             base.update({"type": "prompt", "content": frame.inner.text()})
+        elif isinstance(frame.inner, PreviewWidget):
+            base.update({
+                "type": "preview",
+                "path": frame.inner.path,
+                "mode": frame.inner.mode,
+            })
         else:
             from .monitor import DebugMonitorWidget
             if isinstance(frame.inner, DebugMonitorWidget):

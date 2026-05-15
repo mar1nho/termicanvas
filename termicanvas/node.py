@@ -21,6 +21,7 @@ def _icon_for_inner(inner) -> str:
     import circular sidebar <-> node."""
     # Imports locais pra nao ciclar.
     from .agent import AgentWidget
+    from .preview import PreviewWidget
     from .terminal import TerminalWidget
     from .widgets import NoteWidget, PromptCard
 
@@ -41,6 +42,8 @@ def _icon_for_inner(inner) -> str:
         return "clipboard"
     if isinstance(inner, AgentWidget):
         return "agent_code"
+    if isinstance(inner, PreviewWidget):
+        return "monitor"
     try:
         from .monitor import DebugMonitorWidget
         if isinstance(inner, DebugMonitorWidget):
@@ -76,6 +79,8 @@ class NodeHeader(QWidget):
     edit_role_clicked  = pyqtSignal()
     inbox_clicked      = pyqtSignal()
     chain_clicked      = pyqtSignal()
+    purge_clicked      = pyqtSignal()
+    compact_clicked    = pyqtSignal()
 
     def __init__(self, title, icon=""):
         super().__init__()
@@ -85,6 +90,7 @@ class NodeHeader(QWidget):
         self._last_global  = None
         self._is_focused   = False  # alimenta o indicador idle/ativo
         self._light_mode   = False
+        self._is_compacted  = False
         self._apply_style()
 
         layout = QHBoxLayout(self)
@@ -181,6 +187,40 @@ class NodeHeader(QWidget):
         self.chain_btn.hide()
         layout.addWidget(self.chain_btn)
 
+        self.purge_btn = QPushButton()
+        self.purge_btn.setIcon(get_icon("trash", color=TEXT_MUTED, size=14))
+        self.purge_btn.setIconSize(QSize(14, 14))
+        self.purge_btn.setFixedSize(22, 22)
+        self.purge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.purge_btn.setToolTip("Expurgar workspace gerenciado deste terminal")
+        self.purge_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none; padding: 0;
+            }}
+            QPushButton:hover {{ background: {DANGER}; border-radius: 2px; }}
+        """)
+        self.purge_btn.clicked.connect(self.purge_clicked.emit)
+        self.purge_btn.hide()
+        layout.addWidget(self.purge_btn)
+
+        self.compact_btn = QPushButton()
+        self.compact_btn.setIcon(get_icon("square", color=TEXT_MUTED, size=14))
+        self.compact_btn.setIconSize(QSize(14, 14))
+        self.compact_btn.setFixedSize(22, 22)
+        self.compact_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.compact_btn.setToolTip("Compactar preview")
+        self.compact_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none; padding: 0;
+            }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; border-radius: 2px; }}
+        """)
+        self.compact_btn.clicked.connect(self.compact_clicked.emit)
+        self.compact_btn.hide()
+        layout.addWidget(self.compact_btn)
+
         self.close_btn = QPushButton()
         self.close_btn.setIcon(get_icon("close", color=TEXT_SECONDARY, size=14))
         self.close_btn.setIconSize(QSize(14, 14))
@@ -226,6 +266,12 @@ class NodeHeader(QWidget):
     def show_chain_btn(self):
         self.chain_btn.show()
 
+    def show_purge_btn(self):
+        self.purge_btn.show()
+
+    def show_compact_btn(self):
+        self.compact_btn.show()
+
     def set_pending_count(self, count):
         """Atualiza badge. Esconde quando 0, mostra com numero quando > 0."""
         count = max(0, int(count))
@@ -248,9 +294,15 @@ class NodeHeader(QWidget):
         """)
 
     def _apply_style(self):
+        if self._light_mode:
+            bg = "#e6e6e6"
+            border = "#d4d4d4"
+        else:
+            bg = BG_ELEVATED
+            border = BORDER
         self.setStyleSheet(f"""
-            NodeHeader {{ background: {BG_ELEVATED};
-                         border-bottom: 1px solid {BORDER};
+            NodeHeader {{ background: {bg};
+                         border-bottom: 1px solid {border};
                          border-top-left-radius: 10px;
                          border-top-right-radius: 10px; }}
         """)
@@ -284,9 +336,25 @@ class NodeHeader(QWidget):
             )
 
     def set_light_mode(self, enabled: bool):
-        """Atualiza cor do dot indicador conforme tema."""
+        """Atualiza cor do dot indicador e background do header conforme tema."""
         self._light_mode = bool(enabled)
+        self._apply_style()
         self._refresh_dot()
+
+    def set_compacted(self, compacted: bool):
+        self._is_compacted = bool(compacted)
+        self.setFixedHeight(80 if compacted else 34)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if compacted else Qt.CursorShape.OpenHandCursor)
+        self.dot.setVisible(not compacted)
+        self.title.setVisible(not compacted)
+        self.font_down_btn.setVisible(False if compacted else self.font_down_btn.isVisible())
+        self.font_up_btn.setVisible(False if compacted else self.font_up_btn.isVisible())
+        self.role_btn.setVisible(False if compacted else self.role_btn.isVisible())
+        self.inbox_btn.setVisible(False if compacted else self.inbox_btn.isVisible())
+        self.chain_btn.setVisible(False if compacted else self.chain_btn.isVisible())
+        self.purge_btn.setVisible(False if compacted else self.purge_btn.isVisible())
+        self.close_btn.setVisible(not compacted)
+        self.compact_btn.setVisible(not compacted)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -368,6 +436,9 @@ class NodeFrame(QFrame):
         self._focused      = False
         self._light_mode   = False
         self._node_color   = ACCENT  # sobrescrito por canvas.add_node com a accent global
+        self._compacted    = False
+        self._expanded_size = None
+        self._compact_click_pos = None
         self.setObjectName("node")
         self.setMinimumSize(260, 180)
 
@@ -382,7 +453,7 @@ class NodeFrame(QFrame):
         main.addWidget(self.header)
 
         self.body = QWidget()
-        self.body.setStyleSheet(f"QWidget {{ background: {BG_SURFACE}; }}")
+        self._apply_body_style()
         body_layout = QVBoxLayout(self.body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.addWidget(inner)
@@ -394,13 +465,64 @@ class NodeFrame(QFrame):
 
         self._apply_style()
 
+    def set_compactable(self, enabled: bool):
+        if enabled:
+            self.header.show_compact_btn()
+            self.header.compact_clicked.connect(self.toggle_compacted)
+
+    def toggle_compacted(self):
+        self.set_compacted(not self._compacted)
+
+    def set_compacted(self, compacted: bool):
+        if self._compacted == bool(compacted):
+            return
+        self._compacted = bool(compacted)
+        if compacted:
+            self._expanded_size = QSize(self.width(), self.height())
+            self.body.hide()
+            self.grip.hide()
+            self.setMinimumSize(80, 80)
+            self.setMaximumSize(80, 80)
+            self.resize(80, 80)
+            self.header.set_compacted(True)
+        else:
+            self.setMaximumSize(16777215, 16777215)
+            self.setMinimumSize(260, 180)
+            self.header.set_compacted(False)
+            self.body.show()
+            self.grip.show()
+            target = self._expanded_size or QSize(640, 520)
+            self.resize(max(260, target.width()), max(180, target.height()))
+        self.resized.emit(self.size())
+
+    def mousePressEvent(self, event):
+        if self._compacted and event.button() == Qt.MouseButton.LeftButton:
+            self._compact_click_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._compacted and event.button() == Qt.MouseButton.LeftButton and self._compact_click_pos is not None:
+            delta = event.position().toPoint() - self._compact_click_pos
+            self._compact_click_pos = None
+            if abs(delta.x()) <= 4 and abs(delta.y()) <= 4:
+                self.toggle_compacted()
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
     def _apply_style(self):
         # Borda usa a accent global quando o node esta focado; neutra caso contrario.
-        border = safe_border_color(self._node_color) if self._focused else BORDER
+        neutral_border = "#d4d4d4" if self._light_mode else BORDER
+        bg = "#ffffff" if self._light_mode else BG_SURFACE
+        border = safe_border_color(self._node_color) if self._focused else neutral_border
         width  = 2 if self._focused else 1
         self.setStyleSheet(f"""
-            #node {{ background: {BG_SURFACE}; border: {width}px solid {border}; border-radius: 10px; }}
+            #node {{ background: {bg}; border: {width}px solid {border}; border-radius: 10px; }}
         """)
+
+    def _apply_body_style(self):
+        bg = "#ffffff" if self._light_mode else BG_SURFACE
+        self.body.setStyleSheet(f"QWidget {{ background: {bg}; }}")
 
     def set_node_color(self, color):
         self._node_color = color
@@ -419,10 +541,14 @@ class NodeFrame(QFrame):
         return ""
 
     def set_light_mode(self, enabled: bool):
-        """Atualiza icone do tipo + dot indicador conforme tema."""
+        """Atualiza icone do tipo, dot indicador, frame, body e widget interno conforme tema."""
         self._light_mode = bool(enabled)
+        self._apply_style()
+        self._apply_body_style()
         self.header.set_type_icon(self.header._type_icon_name, light_mode=self._light_mode)
         self.header.set_light_mode(self._light_mode)
+        if hasattr(self.inner, "set_light_mode"):
+            self.inner.set_light_mode(self._light_mode)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

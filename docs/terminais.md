@@ -25,3 +25,9 @@ Ao redimensionar o node, o TermiCanvas recalcula linhas/colunas e ajusta o PTY.
 ## Pasta padrao
 
 A pasta padrao e salva em `session.json` como `canvas.default_cwd`. Na primeira execucao, ela parte do diretorio atual do processo.
+
+## Expurgar pasta
+
+Todo terminal mostra um botao de expurgo no header. Ao confirmar, o TermiCanvas fecha o terminal e apaga a pasta usada como diretorio de trabalho.
+
+Terminais criados automaticamente por agentes via `spawn` rodam em uma pasta isolada dentro de `.termicanvas/<nome>` e a confirmacao indica que e um workspace gerenciado. Terminais abertos manualmente tambem podem ser expurgados, mas a confirmacao avisa que a pasta nao e isolada.

@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -114,6 +115,8 @@ class SidebarChip(QFrame):
 
     clicked         = pyqtSignal()
     close_requested = pyqtSignal()
+    move_up_requested = pyqtSignal()
+    move_down_requested = pyqtSignal()
 
     def __init__(self, frame):
         super().__init__()
@@ -124,7 +127,7 @@ class SidebarChip(QFrame):
         self._has_activity = False
         self.setObjectName("schip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(52)
+        self.setFixedHeight(54)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 8, 8, 8)
@@ -150,10 +153,25 @@ class SidebarChip(QFrame):
         text_col.addWidget(self.cmd_label)
 
         layout.addLayout(text_col, 1)
-
         # Dot de status (idle/active) — fica a direita, antes do close
         self.dot = QLabel("●")
         layout.addWidget(self.dot)
+
+        self.up_btn = QPushButton()
+        self.up_btn.setIconSize(QSize(10, 10))
+        self.up_btn.setFixedSize(16, 16)
+        self.up_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.up_btn.clicked.connect(self.move_up_requested.emit)
+        self.up_btn.mousePressEvent = self._up_btn_mouse_press
+        layout.addWidget(self.up_btn)
+
+        self.down_btn = QPushButton()
+        self.down_btn.setIconSize(QSize(10, 10))
+        self.down_btn.setFixedSize(16, 16)
+        self.down_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.down_btn.clicked.connect(self.move_down_requested.emit)
+        self.down_btn.mousePressEvent = self._down_btn_mouse_press
+        layout.addWidget(self.down_btn)
 
         self.close_btn = QPushButton()
         self.close_btn.setIconSize(QSize(11, 11))
@@ -171,6 +189,14 @@ class SidebarChip(QFrame):
         QPushButton.mousePressEvent(self.close_btn, event)
         event.accept()
 
+    def _up_btn_mouse_press(self, event):
+        QPushButton.mousePressEvent(self.up_btn, event)
+        event.accept()
+
+    def _down_btn_mouse_press(self, event):
+        QPushButton.mousePressEvent(self.down_btn, event)
+        event.accept()
+
     def _apply_palette(self):
         """Re-aplica todos os styles do chip conforme tema atual."""
         pal = _palette(self._light_mode)
@@ -179,6 +205,14 @@ class SidebarChip(QFrame):
             get_icon(self._type_icon_name, color=pal["text_secondary"], size=15).pixmap(15, 15)
         )
         self.close_btn.setIcon(get_icon("close", color=pal["text_muted"], size=11))
+        self.up_btn.setIcon(get_icon("chevron-left", color=pal["text_muted"], size=10))
+        self.down_btn.setIcon(get_icon("chevron-right", color=pal["text_muted"], size=10))
+        order_btn_style = f"""
+            QPushButton {{ background: transparent; border: none; padding: 0; }}
+            QPushButton:hover {{ background: {pal["elevated"]}; border-radius: 3px; }}
+        """
+        self.up_btn.setStyleSheet(order_btn_style)
+        self.down_btn.setStyleSheet(order_btn_style)
         self.close_btn.setStyleSheet(f"""
             QPushButton {{ background: transparent; border: none; padding: 0; }}
             QPushButton:hover {{ background: {DANGER}; border-radius: 3px; }}
@@ -253,6 +287,11 @@ class SidebarChip(QFrame):
         # Re-aplica styles porque dot/cmd_label dependem de _has_activity
         self._apply_palette()
 
+    def set_subtitle(self, text):
+        self._has_activity = False
+        self.cmd_label.setText(text)
+        self._apply_palette()
+
     def set_title(self, title):
         self.name_label.setText(title)
 
@@ -279,11 +318,15 @@ class SnapshotChip(QFrame):
         self._light_mode = False
         self.setObjectName("snapchip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(52)
+        self.setFixedHeight(56)
+        # Expande horizontal pra preencher a coluna da sidebar — sem isso o
+        # chip fica com size hint < largura disponivel e o ⋮ acaba flutuando
+        # no meio (parecendo "cortado" em DPI > 100%).
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 6, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(12, 8, 10, 8)
+        layout.setSpacing(8)
 
         # Icone de snapshot
         self.icon = QLabel()
@@ -295,8 +338,12 @@ class SnapshotChip(QFrame):
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
+        # Nome e meta usam minimumWidth=0 + sizePolicy Ignored pra deixar a
+        # coluna controlar a largura — labels longos elidam via paintEvent.
         self.name_label = QLabel(info["name"])
-        self.name_label.setMaximumWidth(160)
+        self.name_label.setMinimumWidth(0)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._name_full = info["name"]
         text_col.addWidget(self.name_label)
 
         node_count = info.get("node_count", 0)
@@ -304,7 +351,9 @@ class SnapshotChip(QFrame):
         when = datetime.fromtimestamp(modified_at).strftime("%d/%m %H:%M") if modified_at else "?"
         meta_text = f"{node_count} node{'s' if node_count != 1 else ''} · {when}"
         self.meta_label = QLabel(meta_text)
-        self.meta_label.setMaximumWidth(160)
+        self.meta_label.setMinimumWidth(0)
+        self.meta_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._meta_full = meta_text
         text_col.addWidget(self.meta_label)
 
         layout.addLayout(text_col, 1)
@@ -318,6 +367,18 @@ class SnapshotChip(QFrame):
         layout.addWidget(self.menu_btn)
 
         self._apply_palette()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_labels()
+
+    def _elide_labels(self):
+        fm = self.name_label.fontMetrics()
+        avail = max(0, self.name_label.width())
+        self.name_label.setText(fm.elidedText(self._name_full, Qt.TextElideMode.ElideRight, avail))
+        fm2 = self.meta_label.fontMetrics()
+        avail2 = max(0, self.meta_label.width())
+        self.meta_label.setText(fm2.elidedText(self._meta_full, Qt.TextElideMode.ElideRight, avail2))
 
     def _apply_palette(self):
         pal = _palette(self._light_mode)
@@ -524,30 +585,64 @@ class TerminalsSidebar(QWidget):
         self._col.setContentsMargins(6, 8, 6, 10)
         self._col.setSpacing(4)
 
+        # Section AGENTES (colapsavel)
+        self._agent_header = SectionHeader("AGENTES")
+        self._agent_header.toggled.connect(self._on_agents_toggled)
+        self._col.addWidget(self._agent_header)
+
+        self._agent_empty = QLabel("Nenhum agente aberto.")
+        self._agent_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._agent_empty.setStyleSheet(f"""
+            color: {TEXT_MUTED}; font-size: 8.5pt; background: transparent;
+            padding: 14px 12px;
+        """)
+        self._col.addWidget(self._agent_empty)
+
+        self._col.addSpacing(8)
+
         # Section TERMINAIS (colapsavel)
         self._term_header = SectionHeader("TERMINAIS")
         self._term_header.toggled.connect(self._on_terminals_toggled)
         self._col.addWidget(self._term_header)
 
         # Empty-state label dos terminais
-        self._empty = QLabel("Nenhum terminal aberto.\nUse a ilha de ferramentas.")
+        self._empty = QLabel("Nenhum terminal puro aberto.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet(f"""
             color: {TEXT_MUTED}; font-size: 8.5pt; background: transparent;
-            padding: 20px;
+            padding: 14px 12px;
         """)
         self._col.addWidget(self._empty)
 
-        # Section SNAPSHOTS (colapsavel + botao "+")
-        self._save_btn = QPushButton("+")
-        self._save_btn.setFixedSize(22, 22)
+        self._col.addSpacing(8)
+
+        # Section WIDGETS (notas, prompts, previews, etc.)
+        self._widget_header = SectionHeader("WIDGETS")
+        self._widget_header.toggled.connect(self._on_widgets_toggled)
+        self._col.addWidget(self._widget_header)
+
+        self._widget_empty = QLabel("Nenhuma nota/widget aberto.")
+        self._widget_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._widget_empty.setStyleSheet(f"""
+            color: {TEXT_MUTED}; font-size: 8.5pt; background: transparent;
+            padding: 14px 12px;
+        """)
+        self._col.addWidget(self._widget_empty)
+
+        # Section SNAPSHOTS (colapsavel + botao de salvar visivel)
+        self._save_btn = QPushButton("Salvar snapshot")
+        self._save_btn.setIcon(get_icon("save", color=TEXT_SECONDARY, size=13))
+        self._save_btn.setIconSize(QSize(13, 13))
+        self._save_btn.setFixedHeight(28)
+        self._save_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._save_btn.setToolTip("Salvar canvas atual como snapshot (Ctrl+S)")
         self._save_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {TEXT_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 3px;
-                font-size: 11pt; font-weight: 600;
+                border: 1px solid {BORDER}; border-radius: 5px;
+                font-size: 8.5pt; font-weight: 600;
+                padding: 0 8px;
             }}
             QPushButton:hover {{
                 background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
@@ -556,11 +651,12 @@ class TerminalsSidebar(QWidget):
         """)
         self._save_btn.clicked.connect(self.snapshot_save_requested.emit)
 
-        self._snap_header = SectionHeader("SNAPSHOTS", extra_button=self._save_btn)
+        self._snap_header = SectionHeader("SNAPSHOTS")
         self._snap_header.toggled.connect(self._on_snapshots_toggled)
         # Spacer pra dar respiro entre TERMINAIS e SNAPSHOTS (sem linha dura).
         self._col.addSpacing(12)
         self._col.addWidget(self._snap_header)
+        self._col.addWidget(self._save_btn)
 
         # Empty-state dos snapshots
         self._snap_empty = QLabel("Nenhum snapshot.\nClique '+' pra salvar o canvas atual.")
@@ -619,12 +715,17 @@ class TerminalsSidebar(QWidget):
         # nao tava propagando 100% (chip close_btns ficavam visiveis ainda na
         # sidebar de 44px com nome cortado).
         visible = not self._collapsed
+        self._agent_header.setVisible(visible)
         self._term_header.setVisible(visible)
+        self._widget_header.setVisible(visible)
         self._snap_header.setVisible(visible)
-        self._empty.setVisible(visible and self._term_header.is_expanded() and len(self.chips) == 0)
+        self._agent_empty.setVisible(visible and self._agent_header.is_expanded() and self._count_category("agent") == 0)
+        self._empty.setVisible(visible and self._term_header.is_expanded() and self._count_category("terminal") == 0)
+        self._widget_empty.setVisible(visible and self._widget_header.is_expanded() and self._count_category("widget") == 0)
+        self._save_btn.setVisible(visible and self._snap_header.is_expanded())
         self._snap_empty.setVisible(visible and self._snap_header.is_expanded() and len(self._snap_chips) == 0)
         for chip in self.chips.values():
-            chip.setVisible(visible and self._term_header.is_expanded())
+            chip.setVisible(visible and self._header_for_frame(chip.frame).is_expanded())
         for chip in self._snap_chips:
             chip.setVisible(visible and self._snap_header.is_expanded())
         self.collapse_toggled.emit(self._collapsed)
@@ -701,20 +802,23 @@ class TerminalsSidebar(QWidget):
             QPushButton:hover {{ background: {pal["elevated"]}; border-radius: 6px; }}
         """)
         # Section headers
+        self._agent_header.apply_theme(self._light_mode)
         self._term_header.apply_theme(self._light_mode)
+        self._widget_header.apply_theme(self._light_mode)
         self._snap_header.apply_theme(self._light_mode)
         # Save button (+) dentro do snap header
         self._save_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; color: {pal["text_secondary"]};
-                border: 1px solid {pal["border"]}; border-radius: 3px;
-                font-size: 11pt; font-weight: 600;
+                border: 1px solid {pal["border"]}; border-radius: 5px;
+                font-size: 8.5pt; font-weight: 600;
             }}
             QPushButton:hover {{
                 background: {pal["elevated"]}; color: {pal["text_primary"]};
                 border-color: {pal["border_hover"]};
             }}
         """)
+        self._save_btn.setIcon(get_icon("save", color=pal["text_secondary"], size=13))
         # Scroll area scrollbar
         self._scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
@@ -729,6 +833,8 @@ class TerminalsSidebar(QWidget):
             padding: 20px;
         """
         self._empty.setStyleSheet(empty_style)
+        self._agent_empty.setStyleSheet(empty_style.replace("padding: 20px", "padding: 14px 12px"))
+        self._widget_empty.setStyleSheet(empty_style.replace("padding: 20px", "padding: 14px 12px"))
         self._snap_empty.setStyleSheet(empty_style.replace("padding: 20px", "padding: 16px 12px"))
         # Chips (terminais + snapshots)
         for chip in self.chips.values():
@@ -742,26 +848,72 @@ class TerminalsSidebar(QWidget):
 
     # ---------- expand/collapse das secoes ----------
 
+    def _on_agents_toggled(self, expanded: bool):
+        for frame, chip in self.chips.items():
+            if self._category_for_frame(frame) == "agent":
+                chip.setVisible(expanded)
+        self._agent_empty.setVisible(expanded and self._count_category("agent") == 0)
+
     def _on_terminals_toggled(self, expanded: bool):
         # Mostra/esconde todos os SidebarChip + o empty-state de terminais.
-        for chip in self.chips.values():
-            chip.setVisible(expanded)
-        self._empty.setVisible(expanded and len(self.chips) == 0)
+        for frame, chip in self.chips.items():
+            if self._category_for_frame(frame) == "terminal":
+                chip.setVisible(expanded)
+        self._empty.setVisible(expanded and self._count_category("terminal") == 0)
+
+    def _on_widgets_toggled(self, expanded: bool):
+        for frame, chip in self.chips.items():
+            if self._category_for_frame(frame) == "widget":
+                chip.setVisible(expanded)
+        self._widget_empty.setVisible(expanded and self._count_category("widget") == 0)
 
     def _on_snapshots_toggled(self, expanded: bool):
         # Mostra/esconde todos os SnapshotChip + o empty-state de snapshots.
+        self._save_btn.setVisible(expanded)
         for chip in self._snap_chips:
             chip.setVisible(expanded)
         self._snap_empty.setVisible(expanded and len(self._snap_chips) == 0)
 
     # ---------- API publica ----------
 
+    def _category_for_frame(self, frame):
+        if isinstance(frame.inner, TerminalWidget):
+            return "agent" if frame.inner.agent_kind else "terminal"
+        return "widget"
+
+    def _header_for_frame(self, frame):
+        category = self._category_for_frame(frame)
+        if category == "agent":
+            return self._agent_header
+        if category == "terminal":
+            return self._term_header
+        return self._widget_header
+
+    def _count_category(self, category):
+        return sum(1 for frame in self.chips if self._category_for_frame(frame) == category)
+
+    def _empty_label_for_category(self, category):
+        if category == "agent":
+            return self._agent_empty
+        if category == "terminal":
+            return self._empty
+        return self._widget_empty
+
+    def _subtitle_for_frame(self, frame):
+        if isinstance(frame.inner, TerminalWidget):
+            return frame.inner.activity or "idle"
+        name = frame.inner.__class__.__name__.replace("Widget", "")
+        if name == "PromptCard":
+            return "prompt"
+        if name == "Preview":
+            return "preview"
+        if name == "Note":
+            return "nota"
+        return name.lower()
+
     def sync(self, canvas):
-        terminals = [
-            (proxy, f) for proxy, f in canvas.proxies
-            if isinstance(f.inner, TerminalWidget)
-        ]
-        current_frames = {f for _, f in terminals}
+        frames = [(proxy, f) for proxy, f in canvas.proxies]
+        current_frames = {f for _, f in frames}
 
         # Remove chips obsoletos
         for frame in list(self.chips.keys()):
@@ -770,35 +922,53 @@ class TerminalsSidebar(QWidget):
                 chip.setParent(None)
                 chip.deleteLater()
 
-        # Adiciona novos terminais. Insere ANTES do empty-state pra manter a
-        # ordem visual (chips primeiro, depois o empty se a lista zera).
-        empty_idx = self._col.indexOf(self._empty)
-        for _, frame in terminals:
+        for _, frame in frames:
             if frame not in self.chips:
                 chip = SidebarChip(frame)
                 chip.clicked.connect(lambda f=frame: self.terminal_clicked.emit(f))
                 chip.close_requested.connect(lambda f=frame: canvas._close(f))
-                frame.inner.activity_changed.connect(
-                    lambda act, c=chip: c.set_activity(act)
-                )
+                chip.move_up_requested.connect(lambda f=frame: canvas.move_frame_in_order(f, -1))
+                chip.move_down_requested.connect(lambda f=frame: canvas.move_frame_in_order(f, 1))
+                if isinstance(frame.inner, TerminalWidget):
+                    frame.inner.activity_changed.connect(
+                        lambda act, c=chip: c.set_activity(act)
+                    )
                 frame.header.title_changed.connect(
                     lambda t, c=chip: c.set_title(t)
                 )
                 # Respeita o estado colapsado da secao e o tema atual.
-                chip.setVisible(self._term_header.is_expanded())
+                chip.setVisible(self._header_for_frame(frame).is_expanded())
                 chip.apply_theme(self._light_mode)
-                self._col.insertWidget(empty_idx, chip)
-                empty_idx += 1
                 self.chips[frame] = chip
-                chip.set_activity(frame.inner.activity)
+                if isinstance(frame.inner, TerminalWidget):
+                    chip.set_activity(frame.inner.activity)
+                else:
+                    chip.set_subtitle(self._subtitle_for_frame(frame))
 
         # Atualiza foco
+        for chip in self.chips.values():
+            self._col.removeWidget(chip)
+
+        for category in ("agent", "terminal", "widget"):
+            for _, frame in frames:
+                if frame in self.chips and self._category_for_frame(frame) == category:
+                    chip = self.chips[frame]
+                    insert_at = self._col.indexOf(self._empty_label_for_category(category))
+                    self._col.insertWidget(insert_at, chip)
+                    chip.setVisible(self._header_for_frame(frame).is_expanded())
+
         for frame, chip in self.chips.items():
             chip.set_focused(frame is canvas.focused_frame)
 
         # Empty-state visibility — so aparece se a secao estiver expandida
+        self._agent_empty.setVisible(
+            self._agent_header.is_expanded() and self._count_category("agent") == 0
+        )
         self._empty.setVisible(
-            self._term_header.is_expanded() and len(self.chips) == 0
+            self._term_header.is_expanded() and self._count_category("terminal") == 0
+        )
+        self._widget_empty.setVisible(
+            self._widget_header.is_expanded() and self._count_category("widget") == 0
         )
 
     def set_snapshots(self, snapshots: list):

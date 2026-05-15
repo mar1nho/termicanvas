@@ -28,6 +28,7 @@ from .tokens import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     readable_text_color,
+    theme_palette,
 )
 
 
@@ -83,7 +84,7 @@ class AgentWidget(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setStyleSheet(f"background: {BG_SURFACE};")
+        self._light_mode     = False
         self._running        = False
         self._pending_bubble = None
         self.last_response   = ""
@@ -97,19 +98,8 @@ class AgentWidget(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll.setStyleSheet(f"""
-            QScrollArea {{ background: {BG_SURFACE}; border: none; }}
-            QScrollBar:vertical {{
-                background: {BG_SURFACE}; width: 6px; margin: 0;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {BORDER}; border-radius: 3px; min-height: 20px;
-            }}
-            QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
-        """)
 
         self._container = QWidget()
-        self._container.setStyleSheet(f"background: {BG_SURFACE};")
         self._chat_layout = QVBoxLayout(self._container)
         self._chat_layout.setContentsMargins(0, 14, 0, 14)
         self._chat_layout.setSpacing(6)
@@ -119,64 +109,85 @@ class AgentWidget(QWidget):
         layout.addWidget(self._scroll, 1)
 
         # separador
-        sep = QFrame()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background: {BORDER};")
-        layout.addWidget(sep)
+        self._sep = QFrame()
+        self._sep.setFixedHeight(1)
+        layout.addWidget(self._sep)
 
         # input
-        bottom = QWidget()
-        bottom.setStyleSheet(f"background: {BG_SURFACE};")
-        row = QHBoxLayout(bottom)
+        self._bottom = QWidget()
+        row = QHBoxLayout(self._bottom)
         row.setContentsMargins(12, 10, 12, 10)
         row.setSpacing(8)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText("Pergunte algo ao Claude…")
-        self._input.setStyleSheet(f"""
-            QLineEdit {{
-                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 2px;
-                padding: 8px 16px; font-family: 'Segoe UI'; font-size: 10pt;
-            }}
-            QLineEdit:focus {{ border-color: {ACCENT}; }}
-        """)
         self._input.returnPressed.connect(self._send)
         row.addWidget(self._input, 1)
 
         self._btn = QPushButton("↑")
         self._btn.setFixedSize(36, 36)
         self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.clicked.connect(self._send)
+        row.addWidget(self._btn)
+
+        layout.addWidget(self._bottom)
+
+        self._route_btn = QPushButton("→ próximo")
+        self._route_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._route_btn.setVisible(False)
+        self._route_btn.clicked.connect(lambda: self.route_output.emit(self.last_response))
+        layout.addWidget(self._route_btn)
+
+        self._apply_theme()
+
+    def _apply_theme(self):
+        pal = theme_palette(self._light_mode)
+        self.setStyleSheet(f"background: {pal['bg_surface']};")
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{ background: {pal['bg_surface']}; border: none; }}
+            QScrollBar:vertical {{
+                background: {pal['bg_surface']}; width: 6px; margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {pal['border']}; border-radius: 3px; min-height: 20px;
+            }}
+            QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+        """)
+        self._container.setStyleSheet(f"background: {pal['bg_surface']};")
+        self._sep.setStyleSheet(f"background: {pal['border']};")
+        self._bottom.setStyleSheet(f"background: {pal['bg_surface']};")
+        self._input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {pal['bg_elevated']}; color: {pal['text_primary']};
+                border: 1px solid {pal['border']}; border-radius: 2px;
+                padding: 8px 16px; font-family: 'Segoe UI'; font-size: 10pt;
+            }}
+            QLineEdit:focus {{ border-color: {ACCENT}; }}
+        """)
         self._btn.setStyleSheet(f"""
             QPushButton {{
                 background: {ACCENT}; color: white; border: none;
                 border-radius: 2px; font-size: 14pt; font-weight: bold;
             }}
             QPushButton:hover {{ background: {ACCENT_HOVER}; }}
-            QPushButton:disabled {{ background: {BG_ELEVATED}; color: {TEXT_SECONDARY}; }}
+            QPushButton:disabled {{ background: {pal['bg_elevated']}; color: {pal['text_secondary']}; }}
         """)
-        self._btn.clicked.connect(self._send)
-        row.addWidget(self._btn)
-
-        layout.addWidget(bottom)
-
-        self._route_btn = QPushButton("→ próximo")
-        self._route_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._route_btn.setVisible(False)
         self._route_btn.setStyleSheet(f"""
             QPushButton {{
-                background: transparent; color: {TEXT_MUTED};
-                border: 1px solid {BORDER}; border-radius: 2px;
+                background: transparent; color: {pal['text_muted']};
+                border: 1px solid {pal['border']}; border-radius: 2px;
                 padding: 3px 10px; font-size: 8.5pt;
                 margin: 0 12px 8px 12px;
             }}
             QPushButton:hover {{
-                color: {TEXT_PRIMARY}; border-color: {BORDER_HOVER};
-                background: {BG_ELEVATED};
+                color: {pal['text_primary']}; border-color: {pal['border_hover']};
+                background: {pal['bg_elevated']};
             }}
         """)
-        self._route_btn.clicked.connect(lambda: self.route_output.emit(self.last_response))
-        layout.addWidget(self._route_btn)
+
+    def set_light_mode(self, enabled: bool):
+        self._light_mode = bool(enabled)
+        self._apply_theme()
 
     def _add_bubble(self, text, role):
         bubble = ChatBubble(text, role, bubble_bg=self._bubble_bg())

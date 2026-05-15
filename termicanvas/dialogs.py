@@ -4,10 +4,12 @@ import os
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,6 +20,7 @@ from PyQt6.QtWidgets import (
 
 from .agents import AGENT_KINDS
 from .config import get_default_cwd, get_last_custom_cwd
+from .preview import MODE_AUTO, MODE_HTML, MODE_MARKDOWN
 from .roles import list_roles
 from .tokens import (
     ACCENT,
@@ -376,6 +379,282 @@ class TerminalLaunchDialog(QDialog):
         return "managed" if self._create_role_check.isChecked() else "existing"
 
 
+class UnifiedLaunchDialog(QDialog):
+    """Dialogo unico para escolher o tipo de terminal/agente antes de inserir."""
+
+    KIND_ITEMS = [
+        ("PowerShell", "powershell"),
+        ("CMD", "cmd"),
+        ("Claude Code", "claude"),
+        ("Codex CLI", "codex"),
+        ("Gemini CLI", "gemini"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Novo terminal/agente")
+        self.setModal(True)
+        self.setFixedWidth(460)
+        self.setMaximumHeight(680)
+        self._chosen_cwd = get_last_custom_cwd() or get_default_cwd()
+        self._manifest_detected = False
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_SIDEBAR}; }}
+            QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(9)
+
+        title = QLabel("Novo terminal/agente")
+        title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: 'Segoe UI';
+            font-size: 11pt; font-weight: 600; background: transparent;
+        """)
+        layout.addWidget(title)
+
+        layout.addWidget(self._caption("Tipo:"))
+        self.kind_group = QButtonGroup(self)
+        self.kind_group.setExclusive(True)
+        kind_grid = QGridLayout()
+        kind_grid.setSpacing(6)
+        self.kind_buttons = {}
+        for idx, (label, kind) in enumerate(self.KIND_ITEMS):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._choice_style())
+            self.kind_group.addButton(btn)
+            self.kind_buttons[kind] = btn
+            kind_grid.addWidget(btn, idx // 3, idx % 3)
+        self.kind_buttons["powershell"].setChecked(True)
+        self.kind_group.buttonClicked.connect(self._refresh_kind_ui)
+        layout.addLayout(kind_grid)
+
+        layout.addWidget(self._caption("Nome:"))
+        self.name_input = QLineEdit()
+        self.name_input.setStyleSheet(self._input_style())
+        layout.addWidget(self.name_input)
+
+        self.shell_caption = self._caption("Shell do agente:")
+        layout.addWidget(self.shell_caption)
+        self.shell_combo = QComboBox()
+        self.shell_combo.setStyleSheet(self._combo_style())
+        self.shell_combo.addItem("PowerShell", "powershell.exe")
+        self.shell_combo.addItem("CMD", "cmd.exe")
+        layout.addWidget(self.shell_combo)
+
+        self._manifest_status = QLabel("")
+        self._manifest_status.setWordWrap(True)
+        self._manifest_status.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-size: 9pt; background: {BG_ELEVATED};
+            border: 1px solid {BORDER}; border-radius: 6px; padding: 8px 10px;
+        """)
+        layout.addWidget(self._manifest_status)
+
+        self._create_role_check = QCheckBox("Criar role gerenciado quando nao houver manifesto")
+        self._create_role_check.setStyleSheet(self._check_style())
+        self._create_role_check.toggled.connect(self._on_create_role_toggled)
+        layout.addWidget(self._create_role_check)
+
+        self._role_caption = self._caption("Role:")
+        layout.addWidget(self._role_caption)
+        self.role_combo = QComboBox()
+        self.role_combo.setStyleSheet(self._combo_style())
+        self.role_combo.addItem("(livre)", None)
+        for role in list_roles():
+            self.role_combo.addItem(role.name, role.name)
+        layout.addWidget(self.role_combo)
+
+        self._orchestrator_check = QCheckBox("Orquestrador ativo")
+        self._orchestrator_check.setStyleSheet(self._check_style())
+        layout.addWidget(self._orchestrator_check)
+
+        layout.addWidget(self._caption("Diretorio de trabalho:"))
+        self.path_label = QLabel(self._chosen_cwd)
+        self.path_label.setWordWrap(True)
+        self.path_label.setStyleSheet(f"""
+            background: {BG_ELEVATED}; border: 1px solid {BORDER};
+            border-radius: 2px; padding: 8px 10px; color: {TEXT_PRIMARY};
+            font-family: 'Cascadia Mono','Consolas',monospace; font-size: 9.5pt;
+        """)
+        layout.addWidget(self.path_label)
+
+        path_row = QHBoxLayout()
+        default_btn = self._ghost("Pasta padrao")
+        default_btn.clicked.connect(lambda: self._set_path(get_default_cwd()))
+        path_row.addWidget(default_btn)
+        browse_btn = self._ghost("Escolher outra...")
+        browse_btn.clicked.connect(self._browse)
+        path_row.addWidget(browse_btn)
+        layout.addLayout(path_row)
+
+        self._set_default_check = QCheckBox("Definir esta pasta como padrao")
+        self._set_default_check.setStyleSheet(self._check_style())
+        layout.addWidget(self._set_default_check)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        cancel = self._ghost("Cancelar")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+        ok = self._primary("Armar insercao")
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        footer.addWidget(ok)
+        layout.addLayout(footer)
+
+        self._refresh_kind_ui()
+        self.adjustSize()
+
+    def _caption(self, text):
+        c = QLabel(text)
+        c.setStyleSheet(f"""
+            color: {TEXT_MUTED}; font-size: 8.5pt; font-weight: 600;
+            letter-spacing: 1.2px; background: transparent;
+        """)
+        return c
+
+    def _input_style(self):
+        return f"""
+            QLineEdit {{
+                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 2px;
+                padding: 7px 9px;
+                font-family: 'Segoe UI'; font-size: 9.5pt;
+            }}
+            QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
+        """
+
+    def _combo_style(self):
+        return TerminalLaunchDialog._combo_style(self)
+
+    def _choice_style(self):
+        return f"""
+            QPushButton {{
+                background: {BG_ELEVATED}; color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER}; border-radius: 4px;
+                padding: 7px 8px; font-family: 'Segoe UI'; font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                color: {TEXT_PRIMARY}; border-color: {BORDER_HOVER};
+            }}
+            QPushButton:checked {{
+                background: {ACCENT}; color: white; border-color: {ACCENT};
+            }}
+        """
+
+    def _ghost(self, text):
+        return TerminalLaunchDialog._ghost(self, text)
+
+    def _primary(self, text):
+        return TerminalLaunchDialog._primary(self, text)
+
+    def _check_style(self):
+        return f"""
+            QCheckBox {{ color: {TEXT_PRIMARY}; font-size: 9pt; spacing: 8px; background: transparent; }}
+            QCheckBox::indicator {{
+                width: 14px; height: 14px;
+                border: 1px solid {TEXT_SECONDARY};
+                background: {BG_ELEVATED};
+                border-radius: 2px;
+            }}
+            QCheckBox::indicator:hover {{ border-color: {BORDER_HOVER}; }}
+            QCheckBox::indicator:checked {{
+                background: {ACCENT};
+                border: 1px solid {ACCENT};
+            }}
+        """
+
+    def _is_agent(self):
+        return self.chosen_kind() in AGENT_KINDS
+
+    def _refresh_kind_ui(self, *_args):
+        is_agent = self._is_agent()
+        self.shell_caption.setVisible(is_agent)
+        self.shell_combo.setVisible(is_agent)
+        self._manifest_status.setVisible(is_agent)
+        self._create_role_check.setVisible(is_agent)
+        self._role_caption.setVisible(is_agent and self._create_role_check.isChecked())
+        self.role_combo.setVisible(is_agent and self._create_role_check.isChecked())
+        self._orchestrator_check.setVisible(is_agent)
+        self._refresh_manifest_status()
+
+    def _on_create_role_toggled(self):
+        self._refresh_kind_ui()
+
+    def _refresh_manifest_status(self):
+        if not self._is_agent():
+            return
+        manifest = AGENT_KINDS[self.chosen_kind()]["manifest"]
+        manifest_path = os.path.join(self._chosen_cwd, manifest)
+        self._manifest_detected = os.path.isfile(manifest_path)
+        if self._manifest_detected:
+            self._manifest_status.setText(f"{manifest} detectado nesta pasta. O agente usara o contexto do projeto.")
+            self._create_role_check.setChecked(False)
+            self._create_role_check.setVisible(False)
+            self._role_caption.setVisible(False)
+            self.role_combo.setVisible(False)
+        else:
+            self._manifest_status.setText(f"Esta pasta nao tem {manifest}. Voce pode criar um role gerenciado.")
+            self._create_role_check.setVisible(True)
+
+    def _set_path(self, path):
+        self._chosen_cwd = path
+        self.path_label.setText(path)
+        self._refresh_manifest_status()
+
+    def _browse(self):
+        start = self._chosen_cwd if os.path.isdir(self._chosen_cwd) else get_default_cwd()
+        path = QFileDialog.getExistingDirectory(self, "Escolha uma pasta", start, QFileDialog.Option.ShowDirsOnly)
+        if path:
+            self._set_path(path)
+
+    def chosen_kind(self):
+        for kind, button in self.kind_buttons.items():
+            if button.isChecked():
+                return kind
+        return "powershell"
+
+    def chosen_name(self):
+        return self.name_input.text().strip()
+
+    def chosen_cwd(self):
+        return self._chosen_cwd
+
+    def chosen_shell(self):
+        return self.shell_combo.currentData() or "powershell.exe"
+
+    def chosen_manifest_mode(self):
+        if not self._is_agent() or self._manifest_detected:
+            return "existing"
+        return "managed" if self._create_role_check.isChecked() else "existing"
+
+    def chosen_role(self):
+        if self.chosen_manifest_mode() != "managed":
+            return None
+        return self.role_combo.currentData()
+
+    def chosen_orchestrator(self):
+        return bool(self._is_agent() and self._orchestrator_check.isChecked())
+
+    def should_set_default_cwd(self):
+        return self._set_default_check.isChecked()
+
+    def launch_options(self):
+        return {
+            "kind": self.chosen_kind(),
+            "name": self.chosen_name() or None,
+            "cwd": self.chosen_cwd(),
+            "shell": self.chosen_shell(),
+            "manifest_mode": self.chosen_manifest_mode(),
+            "role_name": self.chosen_role(),
+            "orchestrator": self.chosen_orchestrator(),
+            "set_default_cwd": self.should_set_default_cwd(),
+        }
+
+
 class RoleEditorDialog(QDialog):
     """Editor inline do role.md gerenciado pelo TermiCanvas.
 
@@ -466,6 +745,142 @@ class RoleEditorDialog(QDialog):
             self.accept()
         except Exception as e:
             self.editor.setPlainText(self.editor.toPlainText() + f"\n\n[erro ao salvar: {e}]")
+
+
+class PreviewLaunchDialog(QDialog):
+    """Modal de criacao do node Preview."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Novo preview")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_SIDEBAR}; }}
+            QLabel  {{ color: {TEXT_PRIMARY}; background: transparent; }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(26, 24, 26, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("Novo preview")
+        title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY}; font-family: 'Segoe UI';
+            font-size: 12pt; font-weight: 600; background: transparent;
+        """)
+        layout.addWidget(title)
+
+        layout.addWidget(self._caption("Arquivo:"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.path_input = QLineEdit()
+        self.path_input.setPlaceholderText("Escolha um .md, .html ou .htm")
+        self.path_input.setStyleSheet(self._input_style())
+        row.addWidget(self.path_input, 1)
+
+        browse = self._ghost("Escolher...")
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        layout.addLayout(row)
+
+        layout.addWidget(self._caption("Tipo:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.setStyleSheet(self._combo_style())
+        self.mode_combo.addItem("Detectar pelo arquivo", MODE_AUTO)
+        self.mode_combo.addItem("Markdown", MODE_MARKDOWN)
+        self.mode_combo.addItem("HTML", MODE_HTML)
+        layout.addWidget(self.mode_combo)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+
+        cancel = self._ghost("Cancelar")
+        cancel.clicked.connect(self.reject)
+        footer.addWidget(cancel)
+
+        ok = self._primary("Criar preview")
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        footer.addWidget(ok)
+
+        layout.addLayout(footer)
+
+    def _caption(self, text):
+        c = QLabel(text)
+        c.setStyleSheet(f"""
+            color: {TEXT_MUTED}; font-size: 8.5pt; font-weight: 600;
+            letter-spacing: 1.2px; background: transparent;
+        """)
+        return c
+
+    def _input_style(self):
+        return f"""
+            QLineEdit {{
+                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 2px;
+                padding: 10px 12px;
+                font-family: 'Segoe UI'; font-size: 10pt;
+            }}
+            QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
+        """
+
+    def _combo_style(self):
+        return f"""
+            QComboBox {{
+                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 2px;
+                padding: 8px 12px; font-family: 'Segoe UI'; font-size: 10pt;
+            }}
+            QComboBox:focus {{ border: 1px solid {ACCENT}; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                selection-background-color: {ACCENT}; border: 1px solid {BORDER};
+            }}
+        """
+
+    def _ghost(self, text):
+        b = QPushButton(text)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(f"""
+            QPushButton {{ background: transparent; color: {TEXT_SECONDARY};
+                          border: 1px solid {BORDER}; border-radius: 2px;
+                          padding: 9px 14px;
+                          font-family: 'Segoe UI'; font-size: 10pt; }}
+            QPushButton:hover {{ background: {BG_ELEVATED}; color: {TEXT_PRIMARY};
+                                border: 1px solid {BORDER_HOVER}; }}
+        """)
+        return b
+
+    def _primary(self, text):
+        b = QPushButton(text)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(f"""
+            QPushButton {{ background: {ACCENT}; color: white; border: none;
+                          border-radius: 2px;
+                          padding: 10px 18px; font-family: 'Segoe UI';
+                          font-size: 10pt; font-weight: 500; }}
+            QPushButton:hover {{ background: {ACCENT_HOVER}; }}
+            QPushButton:pressed {{ background: {ACCENT_PRESS}; }}
+        """)
+        return b
+
+    def _browse(self):
+        start = get_default_cwd()
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Escolha um arquivo para preview",
+            start,
+            "Markdown/HTML (*.md *.markdown *.mdown *.html *.htm);;Todos os arquivos (*.*)",
+        )
+        if chosen:
+            self.path_input.setText(chosen)
+
+    def chosen_path(self):
+        return self.path_input.text().strip()
+
+    def chosen_mode(self):
+        return self.mode_combo.currentData() or MODE_AUTO
 
 
 class BusOffConfirmDialog(QDialog):

@@ -20,6 +20,8 @@ A Tool Island fica sobre o canvas.
 - Duplo clique em uma ferramenta: cria o node no centro da tela.
 - Shift-clique ou clique direito: abre o dialogo de criacao quando a ferramenta tiver opcoes.
 
+O botao flutuante `+` fica separado da Tool Island. Ele abre o dialogo unificado para escolher PowerShell, CMD, Claude, Codex ou Gemini, configurar pasta, pasta padrao, shell do agente e orquestrador. Ao confirmar, o tipo escolhido fica armado para clicar ou arrastar no canvas.
+
 ## Snap
 
 Movimento e resize usam grid de 40 px. Segure `Alt` durante drag ou resize para movimento livre.

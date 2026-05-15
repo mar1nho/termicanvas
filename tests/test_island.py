@@ -11,12 +11,15 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def test_island_has_nine_buttons(qt_app):
+def test_island_has_ten_buttons(qt_app):
     from termicanvas.island import ToolIsland
     island = ToolIsland()
-    assert len(island.buttons) == 9
+    assert len(island.buttons) == 10
     kinds = [b.kind for b in island.buttons]
-    assert kinds == ["powershell", "cmd", "claude", "codex", "gemini", "note", "prompt", "agent", "debug"]
+    assert kinds == [
+        "powershell", "cmd", "claude", "codex", "gemini",
+        "note", "prompt", "agent", "preview", "debug",
+    ]
 
 
 def test_click_emits_tool_armed_without_dialog(qt_app):
@@ -70,3 +73,13 @@ def test_mouse_press_with_shift_modifier_routes_to_dialog(qt_app):
     )
     btn.mousePressEvent(ev)
     assert received == [("powershell", True)]
+
+
+def test_launcher_island_emits_launcher(qt_app):
+    from termicanvas.island import LauncherIsland
+
+    launcher = LauncherIsland()
+    received = []
+    launcher.tool_armed.connect(lambda k, d: received.append((k, d)))
+    launcher.button._emit_armed(with_dialog=False)
+    assert received == [("launcher", False)]

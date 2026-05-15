@@ -10,6 +10,8 @@ TermiCanvas e um canvas visual para organizar multiplos terminais e agentes CLI 
 - Bus local para agentes trocarem mensagens por CLI.
 - Orquestracao com spawn de agentes filhos e chains visuais.
 - Notas, Prompt Card, Agent one-shot e Debug Monitor.
+- Preview de arquivos Markdown/HTML como nodes do canvas.
+- Expurgo de workspaces gerenciados criados por agentes via spawn.
 - Snapshots nomeados e persistencia automatica em `session.json`.
 
 ## Rodar

@@ -27,6 +27,42 @@ SUCCESS = "#5eba7d"
 DARK_BORDER_FALLBACK = "#4a4a4a"  # mesmo valor de BORDER_HOVER; separado semanticamente
 
 
+# Paleta light usada pelos widgets internos dos nodes (Note, Prompt, Monitor,
+# Preview, Agent). NodeFrame/NodeHeader/sidebar tem paletas locais proprias.
+LIGHT_BG_SURFACE   = "#ffffff"
+LIGHT_BG_ELEVATED  = "#e6e6e6"
+LIGHT_BORDER       = "#d4d4d4"
+LIGHT_BORDER_HOVER = "#b0b0b0"
+LIGHT_TEXT_PRIMARY   = "#1a1a1a"
+LIGHT_TEXT_SECONDARY = "#4a4a4a"
+LIGHT_TEXT_MUTED     = "#8a8a8a"
+
+
+def theme_palette(light_mode: bool) -> dict:
+    """Devolve um dict com as cores base para o tema corrente.
+    Permite que widgets internos dos nodes troquem dark<->light reaplicando
+    seus stylesheets sem hardcodar cada token nos call sites."""
+    if light_mode:
+        return {
+            "bg_surface":     LIGHT_BG_SURFACE,
+            "bg_elevated":    LIGHT_BG_ELEVATED,
+            "border":         LIGHT_BORDER,
+            "border_hover":   LIGHT_BORDER_HOVER,
+            "text_primary":   LIGHT_TEXT_PRIMARY,
+            "text_secondary": LIGHT_TEXT_SECONDARY,
+            "text_muted":     LIGHT_TEXT_MUTED,
+        }
+    return {
+        "bg_surface":     BG_SURFACE,
+        "bg_elevated":    BG_ELEVATED,
+        "border":         BORDER,
+        "border_hover":   BORDER_HOVER,
+        "text_primary":   TEXT_PRIMARY,
+        "text_secondary": TEXT_SECONDARY,
+        "text_muted":     TEXT_MUTED,
+    }
+
+
 def _hex_to_rgb(hex_color):
     """Converte '#rrggbb' em (r, g, b) floats em [0, 1]."""
     h = hex_color.lstrip("#")

@@ -16,6 +16,7 @@ from .agent import AgentWidget
 from .agents import AGENT_KINDS, promote_to_orchestrator
 from .config import get_default_cwd, set_last_custom_cwd
 from .dialogs import TerminalLaunchDialog
+from .preview import PreviewWidget
 from .widgets import NoteWidget, PromptCard
 
 
@@ -30,6 +31,7 @@ DEFAULT_SIZES = {
     "prompt":     (420, 280),
     "agent":      (480, 580),
     "debug":      (560, 600),
+    "preview":    (640, 520),
 }
 
 # kind → shell binary (só pra terminais reais e agentes)
@@ -67,6 +69,11 @@ class NodeFactory:
         with_dialog: bool = False,
         cwd: Optional[str] = None,
         name: Optional[str] = None,
+        owned_cwd: bool = False,
+        shell: Optional[str] = None,
+        role_name: Optional[str] = None,
+        manifest_mode: Optional[str] = None,
+        orchestrator: bool = False,
     ):
         """Cria um node do tipo `kind`.
 
@@ -97,9 +104,15 @@ class NodeFactory:
 
         # Dispatch por categoria
         if kind in ("powershell", "cmd"):
-            return self._create_terminal(kind, geometry, with_dialog, cwd=cwd, name=name)
+            return self._create_terminal(
+                kind, geometry, with_dialog, cwd=cwd, name=name, owned_cwd=owned_cwd,
+            )
         if kind in AGENT_FOR_KIND:
-            return self._create_agent_terminal(kind, geometry, with_dialog, cwd=cwd, name=name)
+            return self._create_agent_terminal(
+                kind, geometry, with_dialog, cwd=cwd, name=name, owned_cwd=owned_cwd,
+                shell=shell, role_name=role_name, manifest_mode=manifest_mode,
+                orchestrator=orchestrator,
+            )
         if kind == "note":
             return self._create_simple(kind, NoteWidget(), "Nota", geometry)
         if kind == "prompt":
@@ -120,6 +133,8 @@ class NodeFactory:
             from .monitor import DebugMonitorWidget
             widget = DebugMonitorWidget(canvas=self.main.canvas, bus=self.main.bus)
             return self._create_simple(kind, widget, "Debug Monitor", geometry, icon="")
+        if kind == "preview":
+            return self._create_preview(geometry, with_dialog)
         return None
 
     # ---------- helpers ----------
@@ -147,7 +162,7 @@ class NodeFactory:
         self._apply_position(frame, geometry)
         return frame
 
-    def _create_terminal(self, kind, geometry, with_dialog, cwd=None, name=None):
+    def _create_terminal(self, kind, geometry, with_dialog, cwd=None, name=None, owned_cwd=False):
         shell = SHELL_FOR_KIND[kind]
         pretty = {"powershell": "PowerShell", "cmd": "CMD"}[kind]
         default_name = name or f"{pretty} {self.main._terminal_counter + 1}"
@@ -167,7 +182,7 @@ class NodeFactory:
                 set_last_custom_cwd(chosen_cwd)
 
         self.main._terminal_counter += 1
-        t = self.main._make_terminal(shell=shell, cwd=chosen_cwd)
+        t = self.main._make_terminal(shell=shell, cwd=chosen_cwd, owned_cwd=owned_cwd)
         w, h = self._resolve_size(kind, geometry)
         frame = self.main.canvas.add_node(t, chosen_name, size=(w, h), icon=chosen_icon)
         self._apply_position(frame, geometry)
@@ -179,7 +194,10 @@ class NodeFactory:
         t.activity_changed.connect(lambda _: self.main._refresh_sidebar())
         return frame
 
-    def _create_agent_terminal(self, kind, geometry, with_dialog, cwd=None, name=None):
+    def _create_agent_terminal(
+        self, kind, geometry, with_dialog, cwd=None, name=None, owned_cwd=False,
+        shell=None, role_name=None, manifest_mode=None, orchestrator=False,
+    ):
         agent_kind = AGENT_FOR_KIND[kind]
         spec = AGENT_KINDS[agent_kind]
         label = spec["label"]
@@ -188,10 +206,10 @@ class NodeFactory:
         chosen_cwd  = cwd or get_default_cwd()
         chosen_name = default_name
         chosen_icon = spec.get("icon", "")
-        chosen_role = None
-        chosen_mode = "existing"
-        chosen_orchestrator = False
-        chosen_shell = SHELL_FOR_KIND[kind]
+        chosen_role = role_name
+        chosen_mode = manifest_mode or "existing"
+        chosen_orchestrator = bool(orchestrator)
+        chosen_shell = shell or SHELL_FOR_KIND[kind]
 
         if with_dialog:
             dlg = TerminalLaunchDialog(
@@ -220,6 +238,7 @@ class NodeFactory:
             shell=chosen_shell, cwd=chosen_cwd,
             agent_kind=agent_kind, role_name=chosen_role,
             manifest_mode=chosen_mode,
+            owned_cwd=owned_cwd,
         )
         w, h = self._resolve_size(kind, geometry)
         frame = self.main.canvas.add_node(t, chosen_name, size=(w, h), icon=chosen_icon)
@@ -233,3 +252,20 @@ class NodeFactory:
         self.main.last_terminal = t
         t.activity_changed.connect(lambda _: self.main._refresh_sidebar())
         return frame
+
+    def _create_preview(self, geometry, with_dialog):
+        path = ""
+        mode = "auto"
+        title = "Preview"
+        if with_dialog:
+            from .dialogs import PreviewLaunchDialog
+            dlg = PreviewLaunchDialog(parent=self.main)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return None
+            path = dlg.chosen_path()
+            mode = dlg.chosen_mode()
+            if path:
+                from pathlib import Path
+                title = Path(path).name
+        widget = PreviewWidget(path=path, mode=mode)
+        return self._create_simple("preview", widget, title, geometry)

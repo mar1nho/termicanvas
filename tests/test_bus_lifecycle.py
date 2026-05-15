@@ -67,3 +67,29 @@ def test_close_calls_unregister(qt_app, monkeypatch):
     )
     assert canvas.proxies == [], "proxy should be removed from canvas.proxies"
 
+
+def test_owned_workspace_path_is_restricted(qt_app, tmp_path):
+    from termicanvas.canvas import CanvasView
+
+    managed = tmp_path / ".termicanvas" / "agent-a"
+    managed.mkdir(parents=True)
+    plain = tmp_path / "project"
+    plain.mkdir()
+
+    owned_terminal = MagicMock(spec=TerminalWidget)
+    owned_terminal.owned_cwd = True
+    owned_terminal.cwd = str(managed)
+
+    plain_terminal = MagicMock(spec=TerminalWidget)
+    plain_terminal.owned_cwd = True
+    plain_terminal.cwd = str(plain)
+
+    manual_terminal = MagicMock(spec=TerminalWidget)
+    manual_terminal.owned_cwd = False
+    manual_terminal.cwd = str(managed)
+
+    assert CanvasView._terminal_owned_workspace_path(owned_terminal) == managed
+    assert CanvasView._terminal_owned_workspace_path(plain_terminal) is None
+    assert CanvasView._terminal_owned_workspace_path(manual_terminal) is None
+    assert CanvasView._terminal_workspace_path(plain_terminal) == plain
+    assert CanvasView._terminal_workspace_path(manual_terminal) == managed

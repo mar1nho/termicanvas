@@ -17,6 +17,7 @@ TOOLS = [
     ("note", "edit", "Nota", 1),
     ("prompt", "clipboard", "Prompt", 1),
     ("agent", "agent_code", "Agent", 1),
+    ("preview", "monitor", "Preview", 1),
     ("debug", "bug", "Debug Monitor", 1),
 ]
 
@@ -218,4 +219,90 @@ class ToolIsland(QWidget):
             p.setPen(divider_color)
             p.drawLine(divider_x, 8, divider_x, self.height() - 8)
 
+        p.end()
+
+
+class LauncherIsland(QWidget):
+    """Botao flutuante separado para abrir o dialogo unificado de criacao."""
+
+    tool_armed = pyqtSignal(str, bool)
+    user_moved = pyqtSignal()
+
+    SIZE = 40
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._dragging = False
+        self._drag_start_global = QPoint()
+        self._drag_start_pos = QPoint()
+        self._light_mode = False
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(0)
+
+        self.button = IconButton("launcher", "plus", "Novo")
+        self.button.armed.connect(self.tool_armed.emit)
+        layout.addWidget(self.button)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_start_global = event.globalPosition().toPoint()
+            self._drag_start_pos = self.pos()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            delta = event.globalPosition().toPoint() - self._drag_start_global
+            target = self._drag_start_pos + delta
+            parent = self.parentWidget()
+            if parent is not None:
+                max_x = max(0, parent.width() - self.width())
+                max_y = max(0, parent.height() - self.height())
+                target.setX(max(0, min(target.x(), max_x)))
+                target.setY(max(0, min(target.y(), max_y)))
+            self.move(target)
+            self.user_moved.emit()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def set_light_mode(self, enabled: bool):
+        self._light_mode = bool(enabled)
+        self.button.set_light_mode(enabled)
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(rect.x(), rect.y(), rect.width(), rect.height(), 16, 16)
+
+        grad = QLinearGradient(0, 0, 0, rect.height())
+        if self._light_mode:
+            grad.setColorAt(0.0, QColor(240, 240, 240, 220))
+            grad.setColorAt(1.0, QColor(220, 220, 220, 220))
+            border_color = QColor(0, 0, 0, 40)
+        else:
+            grad.setColorAt(0.0, QColor(48, 48, 48, 190))
+            grad.setColorAt(1.0, QColor(34, 34, 34, 190))
+            border_color = QColor(255, 255, 255, 36)
+        p.fillPath(path, grad)
+        p.setPen(border_color)
+        p.drawPath(path)
         p.end()

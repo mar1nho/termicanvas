@@ -20,3 +20,14 @@ Fluxo comum:
 ## Agent Widget
 
 Widget de chat one-shot que chama `claude -p`. Ele e util para perguntas rapidas, mas agentes interativos em terminal sao o fluxo principal.
+
+## Preview
+
+Node para visualizar arquivos Markdown ou HTML locais.
+
+- Crie pela Tool Island em `Preview`.
+- Shift-clique ou clique direito abre o dialogo para escolher arquivo e tipo.
+- O tipo pode ser automatico, Markdown ou HTML.
+- HTML usa QtWebEngine quando disponivel, entao CSS externo via paths relativos (`<link rel="stylesheet" href="style.css">`) renderiza como no navegador.
+- O proprio node tambem tem botoes para trocar arquivo e recarregar.
+- O botao de compactar no header reduz o preview para um card 2x2 do grid. Clique no card compacto para expandir de volta.
